@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
+
+# Misc local stuff that shouldn't end up in the repo
+*.bak
+*.tmp
+*.log
+
+# Raw drive logs — kept locally for prep_drives.py, never published.
+# The rendered dashboard (index.html) and the JSON it embeds are what travels.
+data/

@@ -21,3 +21,9 @@ desktop.ini
 # Raw drive logs — kept locally for prep_drives.py, never published.
 # The rendered dashboard (index.html) and the JSON it embeds are what travels.
 data/
+
+# Scheduled-task log — generated each run, not worth publishing
+refresh.log
+
+# State file the daily Claude cowork notifier uses to detect what's new
+.last_seen_state.json

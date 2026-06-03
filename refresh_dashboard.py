@@ -31,7 +31,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 # a meaningful UI/feature change. Format: 'v<major>.<minor>'.
 #   v1.0 - first multi-drive dashboard
 #   v1.1 - Trip Overview hero + Fleet/Drive split + gear inference + shifts KPI
-VERSION = "v1.1"
+VERSION = "v1.4"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
@@ -156,14 +156,4 @@ def git(meta: dict, skip: bool):
 
 
 def main():
-    print("=== Drive Telemetry Dashboard - refresh ===")
-    skip_git = "--no-git" in sys.argv or os.environ.get("NO_GIT") == "1"
-    meta = run_prep()
-    inject(meta)
-    verify(meta)
-    git(meta, skip_git)
-    print(f"\nDone. Open: {HTML_PATH}")
-
-
-if __name__ == "__main__":
-    main()
+    pri

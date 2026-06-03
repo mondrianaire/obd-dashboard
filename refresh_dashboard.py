@@ -31,7 +31,12 @@ HTML_PATH = os.path.join(HERE, "index.html")
 # a meaningful UI/feature change. Format: 'v<major>.<minor>'.
 #   v1.0 - first multi-drive dashboard
 #   v1.1 - Trip Overview hero + Fleet/Drive split + gear inference + shifts KPI
-VERSION = "v1.4"
+#   v1.2 - mobile redesign (tabs, chip+sheet, 44pt targets, small-multiples)
+#   v1.3 - shifting analysis section (regime classifier, per-pair targets)
+#   v1.4 - shift timeline strip + clutch-deviation histogram + clutch sync KPI
+#   v1.5 - 5 sub-tabs per view (Overview / Drivetrain / Engine / Fuel / Diag)
+#          + interactive rev-match calculator in Drivetrain
+VERSION = "v1.5"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

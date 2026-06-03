@@ -27,6 +27,12 @@ PREP = os.path.join(HERE, "prep_drives.py")
 JSON_PATH = os.path.join(HERE, "telemetry_data.json")
 HTML_PATH = os.path.join(HERE, "index.html")
 
+# Dashboard version, surfaced in the corner badge. Bump it whenever you ship
+# a meaningful UI/feature change. Format: 'v<major>.<minor>'.
+#   v1.0 - first multi-drive dashboard
+#   v1.1 - Trip Overview hero + Fleet/Drive split + gear inference + shifts KPI
+VERSION = "v1.1"
+
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
 MIDDOT = "·"
@@ -83,7 +89,7 @@ def inject(meta: dict):
     # we re-write the whole substring instead of trying to splice in pieces.
     drives = meta["totals"]["driveCount"]
     today = datetime.date.today().isoformat()
-    badge = f"v1 {MIDDOT} build {today} {MIDDOT} {drives} drives"
+    badge = f"{VERSION} {MIDDOT} build {today} {MIDDOT} {drives} drives"
     badge_re = (
         r"v[\w.]+\s" + re.escape(MIDDOT) +
         r"\s*build\s\d{4}-\d{2}-\d{2}(?:\s" + re.escape(MIDDOT) +

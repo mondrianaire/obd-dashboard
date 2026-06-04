@@ -17,6 +17,9 @@ DROPBOX_DIR = os.environ.get('DROPBOX_DIR', DEFAULT_DBX)
 REPO_DATA   = os.environ.get('REPO_DATA',   os.path.join(HERE, 'data'))
 DLG_DIR     = os.path.join(REPO_DATA, 'car_scanner')
 THIRD_DIR   = os.path.join(REPO_DATA, 'third_party')
+# Local cold-storage for OBD Fusion CSVs moved out of Dropbox to save quota.
+# Scanned in addition to DROPBOX_DIR; Dropbox wins on duplicate (date, hh:mm).
+ARCHIVE_DIR = os.environ.get('ARCHIVE_DIR', os.path.join(REPO_DATA, 'obd_fusion'))
 OUT         = os.environ.get('OUT_JSON',    os.path.join(HERE, 'telemetry_data.json'))
 
 # unit conversions
@@ -49,8 +52,12 @@ def clean_time_csv(df, col='time', fmt='%H:%M:%S.%f', min_span=10.0):
 
 def bucket(rows, channels, name, date, startTime, source):
     df = pd.DataFrame(rows)
+    # Canonical column list. Anything missing in `rows` is created as NaN so the
+    # rest of the pipeline doesn't trip on KeyError.
     for c in ['spd','rpm','thr','pwr','fuel','boost','acc','lat','lon',
-              'alt','coolant','iat','volt','afrA','afrC','map']:
+              'alt','coolant','iat','volt','afrA','afrC','map',
+              # v1.6 channels (100-col OBD Fusion profile):
+              'load','stft','ltft','ign','maf','tq','lambda','catTemp','railPsi','baro']:
         if c not in df.columns:
             df[c] = np.nan
     df['dt'] = df['t'].diff().fillna(0).clip(0, 2.0)
@@ -64,50 +71,97 @@ def bucket(rows, channels, name, date, startTime, source):
     df['moveDur'] = np.where(df['idle'], 0.0, df['dt'])
     df['bk'] = (df['t'] // 1.0).astype(int)
 
-    def avg(s):
-        s = pd.to_numeric(s, errors='coerce')
-        return None if s.notna().sum() == 0 else round(float(s.mean()), 2)
-    def last(s):
-        s = pd.to_numeric(s, errors='coerce').dropna()
-        return None if len(s) == 0 else float(s.iloc[-1])
+    # Vectorized bucket aggregation. Groupby('bk') once, then build named
+    # mean/sum/max columns in a single pass instead of looping in Python.
+    for c in ['spd','thr','boost','acc','rpm','pwr','fuel','alt','coolant','iat','volt',
+              'afrA','afrC','map','load','stft','ltft','ign','maf','tq','lambda',
+              'catTemp','railPsi','baro','lat','lon']:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+    g = df.groupby('bk', sort=True)
+    aggs = {
+        't_last':  ('t',       'last'),
+        'spd_mean':('spd',     'mean'),
+        'spd_max': ('spd',     'max'),
+        'thr_mean':('thr',     'mean'),
+        'boost_m': ('boost',   'mean'),
+        'acc_m':   ('acc',     'mean'),
+        'lat_l':   ('lat',     'last'),
+        'lon_l':   ('lon',     'last'),
+        'distInc': ('distInc', 'sum'),
+        'fuelInc': ('fuelInc', 'sum'),
+        'fuelIdle':('fuelIdle','sum'),
+        'fuelMove':('fuelMove','sum'),
+        'dur':     ('dt',      'sum'),
+        'moveDur': ('moveDur', 'sum'),
+    }
+    for c in ['rpm','pwr','fuel','alt','coolant','iat','volt','afrA','afrC','map',
+              'load','stft','ltft','ign','maf','tq','lambda','catTemp','railPsi','baro']:
+        if c in df.columns:
+            aggs[f'{c}_m'] = (c, 'mean')
+    if 'rpm' in df.columns: aggs['rpm_max'] = ('rpm', 'max')
+    if 'pwr' in df.columns: aggs['pwr_max'] = ('pwr', 'max')
+    if 'tq'  in df.columns: aggs['tq_max']  = ('tq',  'max')
+    agg = g.agg(**aggs).reset_index(drop=False)
+
+    def _rnd(v, d=2):
+        if pd.isna(v): return None
+        return round(float(v), d)
+    def _round_or_none(v, d):
+        return _rnd(v, d)
 
     buckets = []
-    for bk, g in df.groupby('bk'):
+    for _, r in agg.iterrows():
         row = {
-            't': round(float(g['t'].iloc[-1]), 1),
-            'spd':   avg(g['spd']) or 0,
-            'thr':   avg(g['thr']) or 0,
-            'boost': avg(g['boost']),
-            'acc':   avg(g['acc']),
-            'lat':   round(last(g['lat']),6) if last(g['lat']) not in (None, 0) else None,
-            'lon':   round(last(g['lon']),6) if last(g['lon']) not in (None, 0) else None,
-            'smax':  round(float(pd.to_numeric(g['spd'], errors='coerce').max() or 0), 1),
-            'distInc': round(float(g['distInc'].sum()), 6),
-            'fuelInc': round(float(g['fuelInc'].sum()), 7),
-            'fuelIdle':round(float(g['fuelIdle'].sum()), 7),
-            'fuelMove':round(float(g['fuelMove'].sum()), 7),
-            'dur':     round(float(g['dt'].sum()), 3),
-            'moveDur': round(float(g['moveDur'].sum()), 3),
+            't':       round(float(r['t_last']), 1),
+            'spd':     _rnd(r['spd_mean'], 2) or 0,
+            'thr':     _rnd(r['thr_mean'], 2) or 0,
+            'boost':   _rnd(r['boost_m'], 2),
+            'acc':     _rnd(r['acc_m'], 2),
+            'lat':     round(float(r['lat_l']),6) if (pd.notna(r['lat_l']) and float(r['lat_l']) != 0) else None,
+            'lon':     round(float(r['lon_l']),6) if (pd.notna(r['lon_l']) and float(r['lon_l']) != 0) else None,
+            'smax':    round(float(r['spd_max'] or 0), 1) if pd.notna(r['spd_max']) else 0,
+            'distInc': round(float(r['distInc']), 6),
+            'fuelInc': round(float(r['fuelInc']), 7),
+            'fuelIdle':round(float(r['fuelIdle']), 7),
+            'fuelMove':round(float(r['fuelMove']), 7),
+            'dur':     round(float(r['dur']), 3),
+            'moveDur': round(float(r['moveDur']), 3),
         }
         if channels.get('rpm'):
-            row['rpm']  = avg(g['rpm']) or 0
-            row['rmax'] = round(float(pd.to_numeric(g['rpm'], errors='coerce').max() or 0), 0)
+            row['rpm']  = _rnd(r['rpm_m'], 2) or 0
+            row['rmax'] = round(float(r['rpm_max'] or 0), 0) if pd.notna(r['rpm_max']) else 0
         if channels.get('pwr'):
-            row['pwr']  = avg(g['pwr']) or 0
-            row['pmax'] = round(float(pd.to_numeric(g['pwr'], errors='coerce').max() or 0), 1)
+            row['pwr']  = _rnd(r['pwr_m'], 2) or 0
+            row['pmax'] = round(float(r['pwr_max'] or 0), 1) if pd.notna(r['pwr_max']) else 0
         if channels.get('fuel'):
-            row['fuel'] = avg(g['fuel']) or 0
-        if channels.get('alt'):     row['alt']     = avg(g['alt'])
-        if channels.get('coolant'): row['coolant'] = avg(g['coolant'])
-        if channels.get('iat'):     row['iat']     = avg(g['iat'])
-        if channels.get('volt'):    row['volt']    = avg(g['volt'])
+            row['fuel'] = _rnd(r['fuel_m'], 2) or 0
+        if channels.get('alt'):     row['alt']     = _rnd(r['alt_m'])
+        if channels.get('coolant'): row['coolant'] = _rnd(r['coolant_m'])
+        if channels.get('iat'):     row['iat']     = _rnd(r['iat_m'])
+        if channels.get('volt'):    row['volt']    = _rnd(r['volt_m'])
         if channels.get('afr'):
-            row['afrA'] = avg(g['afrA'])
-            row['afrC'] = avg(g['afrC'])
-        if channels.get('map'):     row['map']     = avg(g['map'])
+            row['afrA'] = _rnd(r['afrA_m'])
+            row['afrC'] = _rnd(r['afrC_m'])
+        if channels.get('map'):     row['map']     = _rnd(r['map_m'])
+        if channels.get('load'):    row['load']    = _rnd(r['load_m'])
+        if channels.get('stft'):    row['stft']    = _rnd(r['stft_m'])
+        if channels.get('ltft'):    row['ltft']    = _rnd(r['ltft_m'])
+        if channels.get('ign'):     row['ign']     = _rnd(r['ign_m'])
+        if channels.get('maf'):     row['maf']     = _rnd(r['maf_m'], 3)
+        if channels.get('tq'):
+            row['tq']  = _rnd(r['tq_m'], 1)
+            row['tmax']= round(float(r['tq_max'] or 0), 1) if pd.notna(r['tq_max']) else 0
+        if channels.get('lambda'):  row['lambda']  = _rnd(r['lambda_m'], 3)
+        if channels.get('catTemp'): row['catTemp'] = _rnd(r['catTemp_m'], 1)
+        if channels.get('railPsi'): row['railPsi'] = _rnd(r['railPsi_m'], 0)
+        if channels.get('baro'):    row['baro']    = _rnd(r['baro_m'], 2)
         buckets.append(row)
 
     real_dur = float(df['t'].iloc[-1] - df['t'].iloc[0])
+    def maxof(col):
+        s = pd.to_numeric(df[col], errors='coerce').dropna()
+        return round(float(s.max()), 1) if len(s) else None
     summary = {
         'duration': round(real_dur, 1),
         'distance': round(float(df['distInc'].sum()), 3),
@@ -118,6 +172,13 @@ def bucket(rows, channels, name, date, startTime, source):
         'maxRpm':  round(float(pd.to_numeric(df['rpm'], errors='coerce').max()), 0) if channels.get('rpm') else None,
         'peakPwr': round(float(pd.to_numeric(df['pwr'], errors='coerce').max()), 1) if channels.get('pwr') else None,
         'maxThr':  round(float(pd.to_numeric(df['thr'], errors='coerce').max()), 1),
+        # v1.6 summary peaks (None on drives that don't have the channel):
+        'peakTq':       maxof('tq')      if channels.get('tq')      else None,
+        'peakBoost':    maxof('boost')   if channels.get('boost')   else None,
+        'maxMap':       maxof('map')     if channels.get('map')     else None,
+        'maxCoolant':   maxof('coolant') if channels.get('coolant') else None,
+        'maxIat':       maxof('iat')     if channels.get('iat')     else None,
+        'maxCatTemp':   maxof('catTemp') if channels.get('catTemp') else None,
         'samples': int(len(df)),
         'buckets': len(buckets),
     }
@@ -140,19 +201,71 @@ OBD_FUSION_FULL_COLS = {
     'lon':   'Longitude (deg)',
 }
 
+# v1.6 — full 100-column OBD Fusion profile (from the test-drive brief).
+# Header names we map to canonical channels; everything else is dropped.
+OBD_FUSION_V2_COLS = {
+    'alt':     'Altitude (ft)',
+    'coolant': 'Engine coolant temperature (°F)',
+    'iat':     'Intake air temperature (°F)',
+    'volt':    'Control module voltage (V)',
+    'load':    'Calculated load value (%)',
+    'stft':    'Short term fuel % trim - Bank 1 (%)',
+    'ltft':    'Long term fuel % trim - Bank 1 (%)',
+    'ign':     'Ignition timing advance for #1 cylinder (deg)',
+    'maf':     'Mass air flow rate (lb/min)',
+    'tq':      'Engine Torque (lb•ft)',
+    'afrA':    'A/F Actual',
+    'afrC':    'A/F Commanded',
+    'lambda':  'O2 sensor lambda wide range (current probe)  (Bank 1  Sensor 1)',
+    'catTemp': 'Catalyst temperature (Bank 1 Sensor 1) (°F)',
+    'railPsi': 'Fuel rail pressure (psi)',
+    'baro':    'Barometric pressure (inHg)',
+    'mapInHg': 'Intake manifold absolute pressure (inHg)',  # converted to psi below
+}
+
 def parse_obd_fusion(path):
     df = pd.read_csv(path, skiprows=1, encoding='utf-8-sig')
     df.columns = [c.strip() for c in df.columns]
-    has_full = 'Engine RPM (RPM)' in set(df.columns)
-    rows = []
-    for _, r in df.iterrows():
-        row = {'t': r['Time (sec)']}
-        for k, c in OBD_FUSION_FULL_COLS.items():
-            row[k] = r.get(c)
-        rows.append(row)
+    cols = set(df.columns)
+    has_full = 'Engine RPM (RPM)' in cols
+    # v2 = the 100-col discovery profile, identified by MAP + wideband lambda.
+    has_v2 = ('Intake manifold absolute pressure (inHg)' in cols
+              and 'O2 sensor lambda wide range (current probe)  (Bank 1  Sensor 1)' in cols)
+    # Build a renamed view with ONLY the canonical channels we care about.
+    # Vectorized rename + to_dict('records') is ~100x faster than iterrows().
+    rename = {'Time (sec)': 't'}
+    for k, c in OBD_FUSION_FULL_COLS.items():
+        if c in cols: rename[c] = k
+    if has_v2:
+        for k, c in OBD_FUSION_V2_COLS.items():
+            if c in cols: rename[c] = k
+    keep_src = [c for c in rename.keys() if c in df.columns]
+    sub = df[keep_src].rename(columns=rename).copy()
+    # Force numeric where applicable
+    for col in sub.columns:
+        if col == 't':
+            sub[col] = pd.to_numeric(sub[col], errors='coerce')
+        else:
+            sub[col] = pd.to_numeric(sub[col], errors='coerce')
+    sub = sub.dropna(subset=['t']).reset_index(drop=True)
+    if has_v2 and 'mapInHg' in sub.columns:
+        sub['map'] = sub['mapInHg'] * INHG_TO_PSI
+    # Pre-bucket 20Hz v2 logs down to 1Hz to keep the pipeline fast.
+    # 1Hz logs pass through unchanged (one row per second already).
+    if has_v2 and len(sub) > 10000:
+        sub['_bk'] = sub['t'].astype(int)
+        agg = sub.groupby('_bk', as_index=False).mean(numeric_only=True)
+        agg['t'] = agg['_bk'].astype(float)
+        sub = agg.drop(columns=['_bk'])
+    rows = sub.to_dict('records')
     channels = {
         'rpm':   has_full, 'pwr':   has_full, 'fuel':  has_full, 'boost': has_full,
-        'alt':   False,'coolant':False,'iat':False,'volt':False,'afr':False,'map':False,
+        # v2-only channels turned on iff the discovery profile is detected
+        'alt':   has_v2, 'coolant': has_v2, 'iat': has_v2, 'volt': has_v2,
+        'afr':   has_v2, 'map':     has_v2,
+        'load':  has_v2, 'stft':    has_v2, 'ltft': has_v2, 'ign':  has_v2,
+        'maf':   has_v2, 'tq':      has_v2, 'lambda': has_v2,
+        'catTemp': has_v2, 'railPsi': has_v2, 'baro': has_v2,
     }
     return rows, channels
 
@@ -239,28 +352,39 @@ for path in dlg_files:
     DRIVES.append(d)
     dlg_taken_keys.add((date, st[:5]))
 
-# 2) OBD Fusion CSV bulk import — skip if .dlg already covers that timestamp
-csv_paths = sorted(glob.glob(os.path.join(DROPBOX_DIR, 'CSVLog_*.csv')))
-print(f"Found {len(csv_paths)} OBD Fusion CSVs in {DROPBOX_DIR}.")
-for path in csv_paths:
-    parsed = parse_obd_fusion_startTime(path)
-    if not parsed:
-        print(f"  skip {os.path.basename(path)}: no parseable StartTime"); continue
-    date, st = parsed
-    key = (date, st[:5])
-    if key in dlg_taken_keys:
-        print(f"  skip {os.path.basename(path)}: .dlg covers {date} {st}"); continue
-    rows, channels = parse_obd_fusion(path)
-    if not rows: continue
-    name = f"OBD Fusion {date} {st[:5]}"
-    try:
-        d = bucket(rows, channels, name, date, st, os.path.basename(path))
-    except Exception as e:
-        print(f"  FAIL {os.path.basename(path)}: {e}"); continue
-    if d['summary']['duration'] < 10:
-        print(f"  skip {os.path.basename(path)}: too short ({d['summary']['duration']}s)"); continue
-    DRIVES.append(d)
-    print(f"  + {os.path.basename(path)} -> {date} {st}  {d['summary']['distance']:.1f}mi  {d['summary']['duration']:.0f}s")
+# 2) OBD Fusion CSV bulk import — Dropbox (live) + archive (cold storage).
+#    Dropbox is scanned first so it wins on duplicates; the archive lets us
+#    move old CSVs out of Dropbox without losing drives from the dashboard.
+csv_sources = [('Dropbox', DROPBOX_DIR), ('archive', ARCHIVE_DIR)]
+csv_seen_keys = set()
+for label, src_dir in csv_sources:
+    if not os.path.isdir(src_dir):
+        print(f"  ({label} dir not present: {src_dir})"); continue
+    csv_paths = sorted(glob.glob(os.path.join(src_dir, 'CSVLog_*.csv')))
+    print(f"Found {len(csv_paths)} OBD Fusion CSVs in {label} ({src_dir}).")
+    for path in csv_paths:
+        parsed = parse_obd_fusion_startTime(path)
+        if not parsed:
+            print(f"  skip {os.path.basename(path)}: no parseable StartTime"); continue
+        date, st = parsed
+        key = (date, st[:5])
+        if key in dlg_taken_keys:
+            print(f"  skip {os.path.basename(path)}: .dlg covers {date} {st}"); continue
+        if key in csv_seen_keys:
+            print(f"  skip {os.path.basename(path)}: already imported from earlier source"); continue
+        rows, channels = parse_obd_fusion(path)
+        if not rows: continue
+        name = f"OBD Fusion {date} {st[:5]}"
+        try:
+            d = bucket(rows, channels, name, date, st, os.path.basename(path))
+        except Exception as e:
+            print(f"  FAIL {os.path.basename(path)}: {e}"); continue
+        if d['summary']['duration'] < 10:
+            print(f"  skip {os.path.basename(path)}: too short ({d['summary']['duration']}s)"); continue
+        DRIVES.append(d)
+        csv_seen_keys.add(key)
+        v2 = ' [v2 100-col]' if channels.get('lambda') else ''
+        print(f"  + {os.path.basename(path)} -> {date} {st}  {d['summary']['distance']:.1f}mi  {d['summary']['duration']:.0f}s{v2}")
 
 # 3) Third-party CSVs (April 29 rich + May 5 stripped) from repo's data/third_party/
 path = os.path.join(THIRD_DIR, '2026-04-29 19-56-26.csv')
@@ -320,6 +444,9 @@ for d in DRIVES:
     seen[d['id']] = True
 
 hist = [{'id': d['id'], 'name': d['name'], 'date': d['date'], **d['summary']} for d in DRIVES]
+def _maxnonnull(key):
+    vals = [h.get(key) for h in hist if h.get(key) is not None]
+    return max(vals) if vals else None
 totals = {
     'driveCount':   len(DRIVES),
     'totalDist':    round(sum(h['distance'] for h in hist), 2),
@@ -327,6 +454,13 @@ totals = {
     'totalFuel':    round(sum((h['fuel'] or 0) for h in hist), 3),
     'maxEverSpeed': max(h['maxSpeed'] for h in hist),
     'maxEverRpm':   max(((h['maxRpm'] or 0) for h in hist)),
+    # v1.6 fleet-wide peaks (None where no drive has logged the channel):
+    'maxEverTq':       _maxnonnull('peakTq'),
+    'maxEverBoost':    _maxnonnull('peakBoost'),
+    'maxEverMap':      _maxnonnull('maxMap'),
+    'maxEverCoolant':  _maxnonnull('maxCoolant'),
+    'maxEverIat':      _maxnonnull('maxIat'),
+    'maxEverCatTemp':  _maxnonnull('maxCatTemp'),
     'vehicle':      '2016 VW Golf GTI (2.0T EA888)',
     'vin':          VIN,
 }

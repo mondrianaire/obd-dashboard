@@ -24,6 +24,7 @@ except Exception:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PREP = os.path.join(HERE, "prep_drives.py")
+ARCHIVE = os.path.join(HERE, "archive_old_csvs.py")
 JSON_PATH = os.path.join(HERE, "telemetry_data.json")
 HTML_PATH = os.path.join(HERE, "index.html")
 
@@ -36,7 +37,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.4 - shift timeline strip + clutch-deviation histogram + clutch sync KPI
 #   v1.5 - 5 sub-tabs per view (Overview / Drivetrain / Engine / Fuel / Diag)
 #          + interactive rev-match calculator in Drivetrain
-VERSION = "v1.5"
+VERSION = "v1.6"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
@@ -56,6 +57,25 @@ def read_text(path):
 def write_text(path, content):
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
+
+
+def rotate_old_csvs():
+    """Pre-step: move CSVs older than ARCHIVE_AFTER_DAYS out of Dropbox.
+
+    Non-fatal — if rotation fails we still continue with the rebuild.
+    """
+    if not os.path.exists(ARCHIVE):
+        return
+    print("[0/4] Rotating aging CSVs out of Dropbox ...")
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    r = subprocess.run([sys.executable, ARCHIVE], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env)
+    print(r.stdout.rstrip())
+    if r.returncode != 0:
+        print(f"  ! archive_old_csvs.py exit {r.returncode} (continuing anyway)")
+        if r.stderr.strip():
+            print("  stderr:", r.stderr.rstrip())
 
 
 def run_prep() -> dict:
@@ -131,34 +151,4 @@ def git(meta: dict, skip: bool):
         print("[4/4] git sync skipped (--no-git or NO_GIT=1).")
         return
     step(4, 4, "Git sync (commit + push) ...")
-    if not os.path.isdir(os.path.join(HERE, ".git")):
-        print("  (no .git here - run from inside the repo to enable git sync)")
-        return
-    drives = meta["totals"]["driveCount"]
-    dist = meta["totals"]["totalDist"]
-    today = datetime.date.today().isoformat()
-    msg = f"Refresh {today}: {drives} drives, {dist:.1f} mi total"
-    env = dict(os.environ)
-    env["PYTHONIOENCODING"] = "utf-8"
-    def run(cmd):
-        r = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", env=env)
-        if r.returncode != 0 and "nothing to commit" not in r.stdout:
-            print(f"  ! {' '.join(cmd)} -> exit {r.returncode}\n"
-                  f"  stdout: {r.stdout}\n  stderr: {r.stderr}")
-        return r
-    run(["git", "add", "-A"])
-    r = run(["git", "commit", "-m", msg])
-    if "nothing to commit" in r.stdout:
-        print("  (no changes to commit)")
-        return
-    print(f"  committed: {msg}")
-    r = run(["git", "push"])
-    if r.returncode == 0:
-        print("  pushed to origin")
-    else:
-        print("  push failed - fix and re-run 'git push' manually")
-
-
-def main():
-    pri
+    if not os.path.isdir(os.path.join(HERE

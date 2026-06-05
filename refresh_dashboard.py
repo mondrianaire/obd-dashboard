@@ -37,7 +37,11 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.4 - shift timeline strip + clutch-deviation histogram + clutch sync KPI
 #   v1.5 - 5 sub-tabs per view (Overview / Drivetrain / Engine / Fuel / Diag)
 #          + interactive rev-match calculator in Drivetrain
-VERSION = "v1.6"
+#   v1.6 - 100-col discovery profile (coolant, MAP, AFR, lambda, fuel trims,
+#          torque, MAF, catalyst temp, rail psi, baro) + 5 new tiles
+#   v1.7 - rev-match calculator becomes hover-driven (mouse position picks
+#          gear + speed, shows upshift and downshift simultaneously)
+VERSION = "v1.7"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
@@ -151,4 +155,43 @@ def git(meta: dict, skip: bool):
         print("[4/4] git sync skipped (--no-git or NO_GIT=1).")
         return
     step(4, 4, "Git sync (commit + push) ...")
-    if not os.path.isdir(os.path.join(HERE
+    if not os.path.isdir(os.path.join(HERE, ".git")):
+        print("  (no .git here - run from inside the repo to enable git sync)")
+        return
+    drives = meta["totals"]["driveCount"]
+    dist = meta["totals"]["totalDist"]
+    today = datetime.date.today().isoformat()
+    msg = f"Refresh {today}: {drives} drives, {dist:.1f} mi total"
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    def run(cmd):
+        r = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env)
+        if r.returncode != 0 and "nothing to commit" not in r.stdout:
+            print(f"  ! {' '.join(cmd)} -> exit {r.returncode}\n"
+                  f"  stdout: {r.stdout}\n  stderr: {r.stderr}")
+        return r
+    run(["git", "add", "-A"])
+    r = run(["git", "commit", "-m", msg])
+    if "nothing to commit" in r.stdout:
+        print("  (no changes to commit)")
+        return
+    print(f"  committed: {msg}")
+    r = run(["git", "push"])
+    if r.returncode == 0:
+        print("  pushed to origin")
+    else:
+        print("  push failed - fix and re-run 'git push' manually")
+
+
+def main():
+    skip_git = "--no-git" in sys.argv or os.environ.get("NO_GIT") == "1"
+    rotate_old_csvs()
+    meta = run_prep()
+    inject(meta)
+    verify(meta)
+    git(meta, skip_git)
+
+
+if __name__ == "__main__":
+    main()

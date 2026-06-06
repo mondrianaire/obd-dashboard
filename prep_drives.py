@@ -57,7 +57,9 @@ def bucket(rows, channels, name, date, startTime, source):
     for c in ['spd','rpm','thr','pwr','fuel','boost','acc','lat','lon',
               'alt','coolant','iat','volt','afrA','afrC','map',
               # v1.6 channels (100-col OBD Fusion profile):
-              'load','stft','ltft','ign','maf','tq','lambda','catTemp','railPsi','baro']:
+              'load','stft','ltft','ign','maf','tq','lambda','catTemp','railPsi','baro',
+              # v1.8 channels (intercooler temp + ambient + IMU + fuel level):
+              'icTempF','amb','ax','ay','az','fuelLvl']:
         if c not in df.columns:
             df[c] = np.nan
     df['dt'] = df['t'].diff().fillna(0).clip(0, 2.0)
@@ -96,7 +98,9 @@ def bucket(rows, channels, name, date, startTime, source):
         'moveDur': ('moveDur', 'sum'),
     }
     for c in ['rpm','pwr','fuel','alt','coolant','iat','volt','afrA','afrC','map',
-              'load','stft','ltft','ign','maf','tq','lambda','catTemp','railPsi','baro']:
+              'load','stft','ltft','ign','maf','tq','lambda','catTemp','railPsi','baro',
+              # v1.8 additions:
+              'amb','fuelLvl','ax','ay','az','icTempF']:
         if c in df.columns:
             aggs[f'{c}_m'] = (c, 'mean')
     if 'rpm' in df.columns: aggs['rpm_max'] = ('rpm', 'max')
@@ -156,6 +160,14 @@ def bucket(rows, channels, name, date, startTime, source):
         if channels.get('catTemp'): row['catTemp'] = _rnd(r['catTemp_m'], 1)
         if channels.get('railPsi'): row['railPsi'] = _rnd(r['railPsi_m'], 0)
         if channels.get('baro'):    row['baro']    = _rnd(r['baro_m'], 2)
+        # v1.8 channels:
+        if channels.get('amb'):     row['amb']     = _rnd(r['amb_m'], 1)
+        if channels.get('fuelLvl'): row['fuelLvl'] = _rnd(r['fuelLvl_m'], 1)
+        if channels.get('imu'):
+            row['ax'] = _rnd(r['ax_m'], 2)
+            row['ay'] = _rnd(r['ay_m'], 2)
+            row['az'] = _rnd(r['az_m'], 2)
+        if channels.get('icTempF'): row['icTempF'] = _rnd(r['icTempF_m'], 1)
         buckets.append(row)
 
     real_dur = float(df['t'].iloc[-1] - df['t'].iloc[0])
@@ -179,6 +191,10 @@ def bucket(rows, channels, name, date, startTime, source):
         'maxCoolant':   maxof('coolant') if channels.get('coolant') else None,
         'maxIat':       maxof('iat')     if channels.get('iat')     else None,
         'maxCatTemp':   maxof('catTemp') if channels.get('catTemp') else None,
+        # v1.8 summary peaks:
+        'maxIcTempF':   maxof('icTempF') if channels.get('icTempF') else None,
+        'maxAmb':       maxof('amb')     if channels.get('amb')     else None,
+        'minFuelLvl':   round(float(pd.to_numeric(df['fuelLvl'], errors='coerce').dropna().min()), 1) if channels.get('fuelLvl') and pd.to_numeric(df['fuelLvl'], errors='coerce').notna().any() else None,
         'samples': int(len(df)),
         'buckets': len(buckets),
     }
@@ -221,6 +237,14 @@ OBD_FUSION_V2_COLS = {
     'railPsi': 'Fuel rail pressure (psi)',
     'baro':    'Barometric pressure (inHg)',
     'mapInHg': 'Intake manifold absolute pressure (inHg)',  # converted to psi below
+    # v1.8 additions: 4 channels already in the SAE profile but never previously ingested,
+    # plus the user-added custom PID for intercooler outlet temperature.
+    'amb':     'Ambient air temperature (°F)',
+    'fuelLvl': 'Fuel level input (%)',
+    'ax':      'Accel X (ft/s²)',
+    'ay':      'Accel Y (ft/s²)',
+    'az':      'Accel Z (ft/s²)',
+    'icTempF': 'Intercooler air temp (f)',  # user's custom Mode-22 PID; post-IC outlet
 }
 
 def parse_obd_fusion(path):
@@ -258,6 +282,10 @@ def parse_obd_fusion(path):
         agg['t'] = agg['_bk'].astype(float)
         sub = agg.drop(columns=['_bk'])
     rows = sub.to_dict('records')
+    # The user added "Intercooler air temp (f)" as a custom PID partway through
+    # — flag it independently so older v2 drives without the custom PID still parse.
+    has_ic = 'Intercooler air temp (f)' in cols
+    has_imu = 'Accel X (ft/s²)' in cols
     channels = {
         'rpm':   has_full, 'pwr':   has_full, 'fuel':  has_full, 'boost': has_full,
         # v2-only channels turned on iff the discovery profile is detected
@@ -266,6 +294,11 @@ def parse_obd_fusion(path):
         'load':  has_v2, 'stft':    has_v2, 'ltft': has_v2, 'ign':  has_v2,
         'maf':   has_v2, 'tq':      has_v2, 'lambda': has_v2,
         'catTemp': has_v2, 'railPsi': has_v2, 'baro': has_v2,
+        # v1.8 channels:
+        'amb':     has_v2,
+        'fuelLvl': has_v2,
+        'imu':     has_imu,    # all three of ax/ay/az move together
+        'icTempF': has_ic,
     }
     return rows, channels
 
@@ -461,6 +494,9 @@ totals = {
     'maxEverCoolant':  _maxnonnull('maxCoolant'),
     'maxEverIat':      _maxnonnull('maxIat'),
     'maxEverCatTemp':  _maxnonnull('maxCatTemp'),
+    # v1.8 fleet-wide:
+    'maxEverIcTempF':  _maxnonnull('maxIcTempF'),
+    'maxEverAmb':      _maxnonnull('maxAmb'),
     'vehicle':      '2016 VW Golf GTI (2.0T EA888)',
     'vin':          VIN,
 }

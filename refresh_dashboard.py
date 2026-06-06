@@ -41,7 +41,11 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          torque, MAF, catalyst temp, rail psi, baro) + 5 new tiles
 #   v1.7 - rev-match calculator becomes hover-driven (mouse position picks
 #          gear + speed, shows upshift and downshift simultaneously)
-VERSION = "v1.7"
+#   v1.8 - ingest 6 previously-dropped channels (intercooler temp, ambient,
+#          IMU accels, fuel level) + 6 new tiles (intercooler efficiency,
+#          cornering G traction circle, MPG timeline, rail psi, catalyst
+#          temp, altitude profile)
+VERSION = "v1.8"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

@@ -25,6 +25,7 @@ except Exception:
 HERE = os.path.dirname(os.path.abspath(__file__))
 PREP = os.path.join(HERE, "prep_drives.py")
 ARCHIVE = os.path.join(HERE, "archive_old_csvs.py")
+TESTS = os.path.join(HERE, "tests", "test_dataviews.py")
 JSON_PATH = os.path.join(HERE, "telemetry_data.json")
 HTML_PATH = os.path.join(HERE, "index.html")
 
@@ -191,12 +192,38 @@ def git(meta: dict, skip: bool):
         print("  push failed - fix and re-run 'git push' manually")
 
 
+def run_tests():
+    """Post-inject regression suite. Logs PASS/WARN/FAIL summary.
+    Non-fatal: a test failure doesn't block the git push — it surfaces in
+    refresh.log so we notice the next time we check.
+    """
+    if not os.path.exists(TESTS):
+        return
+    print("[3.5/4] Running dashboard regression suite ...")
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["NO_COLOR"] = "1"
+    r = subprocess.run([sys.executable, TESTS], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env)
+    # Print just the summary block (everything after the "==========" divider).
+    out = r.stdout or ""
+    if "==========" in out:
+        summary = out.split("==========", 1)[1].strip()
+        print(f"  {summary}")
+    else:
+        # Fall back to last 5 lines on unexpected output
+        print("\n".join("  " + line for line in out.splitlines()[-5:]))
+    if r.returncode != 0:
+        print(f"  ! tests had FAILures (exit {r.returncode}) — review refresh.log")
+
+
 def main():
     skip_git = "--no-git" in sys.argv or os.environ.get("NO_GIT") == "1"
     rotate_old_csvs()
     meta = run_prep()
     inject(meta)
     verify(meta)
+    run_tests()
     git(meta, skip_git)
 
 

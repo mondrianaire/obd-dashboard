@@ -45,7 +45,10 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          IMU accels, fuel level) + 6 new tiles (intercooler efficiency,
 #          cornering G traction circle, MPG timeline, rail psi, catalyst
 #          temp, altitude profile)
-VERSION = "v1.8"
+#   v1.9 - shift detection plausibility filter + regime now uses physics-derived
+#          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
+#          fixing apparent over-redline shifts caused by sample lag
+VERSION = "v1.9"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

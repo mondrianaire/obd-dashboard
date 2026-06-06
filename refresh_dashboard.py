@@ -49,7 +49,14 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
-VERSION = "v1.9"
+#   v2.0 - IA reorganization for sport/performance daily-driver telos:
+#          - Engine Health Summary chips (Overview)
+#          - Peak Moments tile (Performance, renamed from Engine & Boost)
+#          - Knock Event Timeline + KPI strip (Performance)
+#          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
+#          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
+#            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
+VERSION = "v2.0"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

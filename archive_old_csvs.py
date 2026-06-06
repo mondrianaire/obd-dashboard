@@ -2,18 +2,27 @@
 # -*- coding: utf-8 -*-
 """archive_old_csvs.py - materialize + rotate aging OBD CSVs out of Dropbox.
 
-Why: the free Dropbox tier is small, and Car Scanner "all PIDs" logs run
-70+ MB each. Once a drive is more than ARCHIVE_AFTER_DAYS old it doesn't
-need to live in the synced folder anymore — prep_drives.py also scans the
-local archive folder, so the dashboard keeps showing every drive.
+Why: the free Dropbox tier is small, and v2 100-col CSVs run 60-70 MB
+each. The local archive at data/obd_fusion/ keeps copies of every drive,
+and prep_drives.py scans both Dropbox AND archive — so we can be aggressive
+about clearing Dropbox without losing anything from the dashboard.
+
+Rotation rule (any of these conditions keeps a file in Dropbox; otherwise
+it gets moved to the local archive):
+  - file is among the KEEP_NEWEST most recently logged drives (default 1)
+  - file's mtime is within ARCHIVE_AFTER_DAYS (default 1)
+  - file was modified within MIN_AGE_MINUTES (default 5)  -- safety buffer
+    so we never grab a file mid-upload from the phone
+
+Defaults add up to: "Dropbox holds the single newest drive plus anything
+logged in the last 24 hours, and we never touch anything modified in the
+last 5 minutes." Tune via environment variables.
 
 What it does (in order):
   1. MATERIALIZE: walks Dropbox dir, finds any CSVLog_*.csv that Dropbox
-     Smart Sync is holding as online-only (cloud placeholder, not downloaded
-     to disk), and forces it local by reading one byte. This means
-     prep_drives.py won't ever block mid-read waiting for the cloud.
-  2. ARCHIVE: any CSV older than ARCHIVE_AFTER_DAYS (default 14) is moved
-     out of Dropbox into the local archive at data/obd_fusion/.
+     Smart Sync is holding as online-only and forces it local by reading
+     one byte. Prevents prep_drives.py from blocking on cloud reads.
+  2. ARCHIVE: applies the keep/move rule above.
   3. Prints a summary (files materialized, files archived, MB freed).
 
 Run standalone, or wire it into refresh_dashboard.py as a pre-step.
@@ -26,7 +35,9 @@ VIN         = '3VW5T7AU2GM058168'
 DEFAULT_DBX = os.path.expanduser(f'~/Dropbox/Apps/OBD Fusion/CsvLogs/{VIN}')
 DROPBOX_DIR = os.environ.get('DROPBOX_DIR', DEFAULT_DBX)
 ARCHIVE_DIR = os.environ.get('ARCHIVE_DIR', os.path.join(HERE, 'data', 'obd_fusion'))
-ARCHIVE_AFTER_DAYS = int(os.environ.get('ARCHIVE_AFTER_DAYS', '14'))
+ARCHIVE_AFTER_DAYS = int(os.environ.get('ARCHIVE_AFTER_DAYS', '1'))
+KEEP_NEWEST       = int(os.environ.get('KEEP_NEWEST', '1'))
+MIN_AGE_MINUTES   = int(os.environ.get('MIN_AGE_MINUTES', '5'))
 
 # Force UTF-8 stdout for Task Scheduler runs (cp1252 default breaks unicode).
 try:
@@ -123,40 +134,46 @@ def main():
     materialize_offline_files(DROPBOX_DIR)
 
 
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=ARCHIVE_AFTER_DAYS)
-    cutoff_ts = cutoff.timestamp()
+    now_ts = datetime.datetime.now().timestamp()
+    age_cutoff_ts = now_ts - ARCHIVE_AFTER_DAYS * 86400
+    safety_cutoff_ts = now_ts - MIN_AGE_MINUTES * 60
 
-    candidates = sorted(glob.glob(os.path.join(DROPBOX_DIR, 'CSVLog_*.csv')))
+    # Sort newest-first so KEEP_NEWEST picks the most recent K
+    candidates = sorted(glob.glob(os.path.join(DROPBOX_DIR, 'CSVLog_*.csv')),
+                        key=os.path.getmtime, reverse=True)
     moved = 0
     freed_bytes = 0
     kept = 0
+    kept_reasons = []
 
-    for src in candidates:
-        mtime = os.path.getmtime(src)
-        if mtime >= cutoff_ts:
-            kept += 1
-            continue
-        fn = os.path.basename(src)
+    for rank, src_path in enumerate(candidates):
+        mtime = os.path.getmtime(src_path)
+        fn = os.path.basename(src_path)
+        sz = os.path.getsize(src_path)
+        # Keep conditions (any one wins):
+        if rank < KEEP_NEWEST:
+            kept += 1; kept_reasons.append(f"{fn} (newest #{rank+1})"); continue
+        if mtime >= age_cutoff_ts:
+            kept += 1; kept_reasons.append(f"{fn} (<{ARCHIVE_AFTER_DAYS}d old)"); continue
+        if mtime >= safety_cutoff_ts:
+            kept += 1; kept_reasons.append(f"{fn} (mod <{MIN_AGE_MINUTES}min ago — in-progress upload?)"); continue
+        # Otherwise: archive
         dst = os.path.join(ARCHIVE_DIR, fn)
-        sz = os.path.getsize(src)
         try:
             if os.path.exists(dst):
                 os.remove(dst)
-            shutil.move(src, dst)
+            shutil.move(src_path, dst)
         except Exception as e:
             print(f"  ! failed to move {fn}: {e}")
             continue
         moved += 1
         freed_bytes += sz
-        age_days = (datetime.datetime.now().timestamp() - mtime) / 86400
-        print(f"  archived: {fn}  ({sz/1024/1024:.1f} MB, {age_days:.0f}d old)")
+        age_days = (now_ts - mtime) / 86400
+        print(f"  archived: {fn}  ({sz/1024/1024:.1f} MB, {age_days:.1f}d old)")
 
-    if moved == 0:
-        print(f"[archive] nothing older than {ARCHIVE_AFTER_DAYS}d in Dropbox "
-              f"({kept} CSV(s) still recent)")
-    else:
-        print(f"[archive] moved {moved} file(s), freed {freed_bytes/1024/1024:.1f} MB. "
-              f"{kept} CSV(s) still in Dropbox.")
+    print(f"[archive] kept {kept} in Dropbox, moved {moved}, freed {freed_bytes/1024/1024:.1f} MB.")
+    for reason in kept_reasons:
+        print(f"  keep: {reason}")
     return 0
 
 

@@ -198,6 +198,68 @@ def bucket(rows, channels, name, date, startTime, source):
         'samples': int(len(df)),
         'buckets': len(buckets),
     }
+    # v2.0 — health + peak metrics. Computed from the 1Hz buckets (not raw df)
+    # since the buckets are what the dashboard sees and what we want to surface.
+    bdf = pd.DataFrame(buckets)
+    def _bk_max_with_t(col):
+        """(peak_value, t_of_peak) or (None, None) — for surfacing 'best moment' tiles."""
+        if col not in bdf.columns: return (None, None)
+        s = pd.to_numeric(bdf[col], errors='coerce')
+        if not s.notna().any(): return (None, None)
+        idx = s.idxmax()
+        return (round(float(s.iloc[idx]), 1), round(float(bdf['t'].iloc[idx]), 0))
+    # Best torque/power/boost moments — what speed, what RPM, what gear inferred,
+    # the t of the moment so the UI can jump to it.
+    def _peak_context(col):
+        v, t = _bk_max_with_t(col)
+        if v is None: return None
+        s = pd.to_numeric(bdf[col], errors='coerce')
+        if not s.notna().any(): return None
+        idx_label = s.idxmax()
+        # idx_label is a pandas index label; use it with .loc, then float() everything.
+        ctx = {'value': float(v), 't': float(t)}
+        for k in ('rpm', 'spd', 'thr', 'boost'):
+            if k not in bdf.columns:
+                continue
+            try:
+                raw = bdf[k].loc[idx_label]
+                if pd.isna(raw):
+                    continue
+                ctx[k] = round(float(raw), 1)
+            except Exception:
+                continue
+        return ctx
+    summary['peakTqMoment']    = _peak_context('tq') if channels.get('tq') else None
+    summary['peakPwrMoment']   = _peak_context('pwr') if channels.get('pwr') else None
+    summary['peakBoostMoment'] = _peak_context('boost')
+    # Knock events: how many bucket-seconds had boost>2 AND ign<-5
+    if channels.get('ign') and 'boost' in bdf.columns:
+        ig = pd.to_numeric(bdf['ign'], errors='coerce')
+        bo = pd.to_numeric(bdf['boost'], errors='coerce')
+        boost_mask = bo > 2
+        knock_mask = boost_mask & (ig < -5)
+        boost_s = int(boost_mask.sum())
+        knock_s = int(knock_mask.sum())
+        summary['boostTimeS']     = int(boost_s)
+        summary['knockEvents']    = int(knock_s)
+        summary['knockEventRate'] = float(round(100 * knock_s / boost_s, 2)) if boost_s else None
+    else:
+        summary['boostTimeS']     = None
+        summary['knockEvents']    = None
+        summary['knockEventRate'] = None
+    # Mean LTFT for trend analysis across drives
+    if channels.get('ltft'):
+        ltft_s = pd.to_numeric(bdf['ltft'], errors='coerce').dropna()
+        summary['avgLTFT'] = round(float(ltft_s.mean()), 2) if len(ltft_s) else None
+    else:
+        summary['avgLTFT'] = None
+    # Mean coolant temperature once warm (>180°F) — for cruise-coolant trend
+    if channels.get('coolant'):
+        c = pd.to_numeric(bdf['coolant'], errors='coerce').dropna()
+        warm = c[c > 180]
+        summary['avgWarmCoolant'] = round(float(warm.mean()), 1) if len(warm) > 30 else None
+    else:
+        summary['avgWarmCoolant'] = None
     drive_id = re.sub(r'[^a-z0-9_]', '_', name.lower())
     return {'id': drive_id, 'name': name, 'date': date, 'startTime': startTime,
             'source': source, 'channels': channels, 'summary': summary, 'rows': buckets}

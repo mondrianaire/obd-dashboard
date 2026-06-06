@@ -49,6 +49,11 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.1 - economy-focused shift framework parallel to the performance one:
+#          lug/economy/wasteful/high-rev classifier targeting BSFC sweet spot
+#          (1500-2200 RPM landing) + green-band targets per gear pair +
+#          economy hit rate / lugging count / worst-pair KPIs (Drivetrain).
+#          Reveals daily-driver shift inefficiency invisible to the perf framework.
 #   v2.0 - IA reorganization for sport/performance daily-driver telos:
 #          - Engine Health Summary chips (Overview)
 #          - Peak Moments tile (Performance, renamed from Engine & Boost)
@@ -56,7 +61,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.0"
+VERSION = "v2.1"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

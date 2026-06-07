@@ -49,6 +49,16 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.5 - outlier-driven correctness fixes:
+#          - knock-event definition refined: requires throttle > 30% to exclude
+#            post-WOT lift-off artifacts (ECU parking ignition during fuel cut
+#            was inflating knock counts ~2x); per-drive knock rates drop from
+#            ~6% to ~3% (genuine knock now visible)
+#          - Cornering G filtered to spd > 3 mph (drops phone-jostle outliers
+#            at idle that were dragging the chart axes)
+#          - Peak Moments suppressed when value=0 or RPM<200 (engine-off drives)
+#          - AFR vs throttle scatter y-axis capped at 22 (wideband saturation
+#            at lambda~2.0 during cruise was compressing the readable area)
 #   v2.4 - bug fix: Wideband lambda + Fuel trim stability tiles were misplaced
 #          in Fleet Fuel & Air panel since v1.6 (label said 'this drive' but
 #          they were in Fleet view). Moved to Drive Fuel & Air where they belong.
@@ -71,7 +81,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.4"
+VERSION = "v2.5"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

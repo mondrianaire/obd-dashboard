@@ -232,12 +232,18 @@ def bucket(rows, channels, name, date, startTime, source):
     summary['peakTqMoment']    = _peak_context('tq') if channels.get('tq') else None
     summary['peakPwrMoment']   = _peak_context('pwr') if channels.get('pwr') else None
     summary['peakBoostMoment'] = _peak_context('boost')
-    # Knock events: how many bucket-seconds had boost>2 AND ign<-5
-    if channels.get('ign') and 'boost' in bdf.columns:
+    # Knock events — refined v2.5 definition.
+    # OLD: boost>2 AND ign<-5  → caught post-WOT lift-off artifacts where the
+    # ECU parks ignition advance during decel fuel cut (looks like a -25° pull
+    # but isn't real knock).
+    # NEW: boost>2 AND ign<-5 AND throttle>30% — the throttle gate requires
+    # active pulling, eliminating the lift-off false positives.
+    if channels.get('ign') and 'boost' in bdf.columns and 'thr' in bdf.columns:
         ig = pd.to_numeric(bdf['ign'], errors='coerce')
         bo = pd.to_numeric(bdf['boost'], errors='coerce')
+        th = pd.to_numeric(bdf['thr'], errors='coerce')
         boost_mask = bo > 2
-        knock_mask = boost_mask & (ig < -5)
+        knock_mask = boost_mask & (ig < -5) & (th > 30)
         boost_s = int(boost_mask.sum())
         knock_s = int(knock_mask.sum())
         summary['boostTimeS']     = int(boost_s)

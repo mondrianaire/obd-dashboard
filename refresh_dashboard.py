@@ -49,6 +49,9 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.4 - bug fix: Wideband lambda + Fuel trim stability tiles were misplaced
+#          in Fleet Fuel & Air panel since v1.6 (label said 'this drive' but
+#          they were in Fleet view). Moved to Drive Fuel & Air where they belong.
 #   v2.3 - mobile default top-level view = Fleet (was Drive), so first open
 #          on phone lands on Fleet > Drivetrain > rev-match. Fleet rev-match
 #          card also moved to top of Fleet Drivetrain (matching Drive view).
@@ -68,7 +71,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.3"
+VERSION = "v2.4"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

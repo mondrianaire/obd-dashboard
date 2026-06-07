@@ -49,6 +49,10 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.2 - rev-match calculator promoted to top of Drivetrain tab as the
+#          feature card + Drivetrain set as the default sub-tab on first
+#          visit + iOS touch hardening (webkit-touch-callout:none,
+#          user-select:none, pointerevents fallback for iPadOS Safari)
 #   v2.1 - economy-focused shift framework parallel to the performance one:
 #          lug/economy/wasteful/high-rev classifier targeting BSFC sweet spot
 #          (1500-2200 RPM landing) + green-band targets per gear pair +
@@ -61,7 +65,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.1"
+VERSION = "v2.2"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

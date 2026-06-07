@@ -49,6 +49,9 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.3 - mobile default top-level view = Fleet (was Drive), so first open
+#          on phone lands on Fleet > Drivetrain > rev-match. Fleet rev-match
+#          card also moved to top of Fleet Drivetrain (matching Drive view).
 #   v2.2 - rev-match calculator promoted to top of Drivetrain tab as the
 #          feature card + Drivetrain set as the default sub-tab on first
 #          visit + iOS touch hardening (webkit-touch-callout:none,
@@ -65,7 +68,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.2"
+VERSION = "v2.3"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

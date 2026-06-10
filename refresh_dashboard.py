@@ -27,6 +27,7 @@ PREP = os.path.join(HERE, "prep_drives.py")
 ARCHIVE = os.path.join(HERE, "archive_old_csvs.py")
 TESTS = os.path.join(HERE, "tests", "test_dataviews.py")
 JSON_PATH = os.path.join(HERE, "telemetry_data.json")
+JS_PATH   = os.path.join(HERE, "telemetry_data.js")
 HTML_PATH = os.path.join(HERE, "index.html")
 
 # Dashboard version, surfaced in the corner badge. Bump it whenever you ship
@@ -49,6 +50,11 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.6 - externalize embedded JSON: data moves from inline const RAW in
+#          index.html (14 MB) to telemetry_data.js loaded via <script src>.
+#          index.html drops to ~180 KB and stays editable; downstream agents
+#          no longer hit Read-tool truncation. refresh_dashboard.py writes
+#          telemetry_data.js in step 2 instead of splicing into index.html.
 #   v2.5 - outlier-driven correctness fixes:
 #          - knock-event definition refined: requires throttle > 30% to exclude
 #            post-WOT lift-off artifacts (ECU parking ignition during fuel cut
@@ -81,7 +87,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.5"
+VERSION = "v2.6"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
@@ -143,19 +149,18 @@ def run_prep() -> dict:
 
 
 def inject(meta: dict):
-    step(2, 4, "Injecting data into index.html ...")
+    step(2, 4, "Writing telemetry_data.js + bumping HTML badge ...")
     if not os.path.exists(HTML_PATH):
         sys.exit(f"  ! index.html not found at {HTML_PATH}")
     data = read_text(JSON_PATH)
+    # v2.6: data is no longer inlined into index.html. We write it to
+    # telemetry_data.js as `window.RAW = {...};` and index.html loads it via
+    # <script src="telemetry_data.js"></script>. Result: index.html shrinks
+    # from ~14 MB to ~180 KB and stays editable.
+    write_text(JS_PATH, "window.RAW = " + data + ";\n")
+    print(f"  Data JS size: {os.path.getsize(JS_PATH):,} bytes")
+    # Bump the version badge in index.html
     html = read_text(HTML_PATH)
-    # Replace the embedded `const RAW = {...};`
-    new_html, n = re.subn(r"const RAW = \{.*?\};",
-                          "const RAW = " + data + ";",
-                          html, count=1, flags=re.S)
-    if n != 1:
-        sys.exit("  ! could not find 'const RAW = {...};' anchor in index.html")
-    # Bump the version badge. The badge contains middle-dot separators (U+00B7);
-    # we re-write the whole substring instead of trying to splice in pieces.
     drives = meta["totals"]["driveCount"]
     today = datetime.date.today().isoformat()
     badge = f"{VERSION} {MIDDOT} build {today} {MIDDOT} {drives} drives"
@@ -164,25 +169,26 @@ def inject(meta: dict):
         r"\s*build\s\d{4}-\d{2}-\d{2}(?:\s" + re.escape(MIDDOT) +
         r"\s*\d+\s*drives)?"
     )
-    new_html, vn = re.subn(badge_re, badge, new_html, count=1)
+    new_html, vn = re.subn(badge_re, badge, html, count=1)
     if vn != 1:
         print("  (note: version badge anchor not found - leaving as-is)")
-    # Strip any trailing nulls from previous larger writes.
-    end = new_html.rfind("</html>") + len("</html>") + 1
-    new_html = new_html[:end].rstrip("\x00").rstrip() + "\n"
-    write_text(HTML_PATH, new_html)
+    if new_html != html:
+        write_text(HTML_PATH, new_html)
     print(f"  HTML size: {len(new_html):,} bytes")
     print(f"  Badge:     {badge}")
 
 
 def verify(meta: dict):
     step(3, 4, "Verifying ...")
-    sz = os.path.getsize(HTML_PATH)
-    if sz < 100_000:
-        sys.exit(f"  ! HTML suspiciously small ({sz} bytes)")
-    head = read_text(HTML_PATH)[:20000]
-    if "__DATA__" in head:
-        sys.exit("  ! '__DATA__' placeholder still present")
+    html_sz = os.path.getsize(HTML_PATH)
+    js_sz = os.path.getsize(JS_PATH) if os.path.exists(JS_PATH) else 0
+    if html_sz < 50_000:
+        sys.exit(f"  ! HTML suspiciously small ({html_sz} bytes)")
+    if js_sz < 100_000:
+        sys.exit(f"  ! telemetry_data.js suspiciously small ({js_sz} bytes)")
+    html_head = read_text(HTML_PATH)[:5000]
+    if 'src="telemetry_data.js"' not in html_head:
+        sys.exit("  ! index.html is missing <script src=\"telemetry_data.js\"> reference")
     drives = meta["totals"]["driveCount"]
     dist = meta["totals"]["totalDist"]
     dur = meta["totals"]["totalDur"] / 3600

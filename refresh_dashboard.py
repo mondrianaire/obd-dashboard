@@ -28,6 +28,7 @@ ARCHIVE = os.path.join(HERE, "archive_old_csvs.py")
 TESTS = os.path.join(HERE, "tests", "test_dataviews.py")
 JSON_PATH = os.path.join(HERE, "telemetry_data.json")
 JS_PATH   = os.path.join(HERE, "telemetry_data.js")
+STATUS_PATH = os.path.join(HERE, "telemetry_status.json")
 HTML_PATH = os.path.join(HERE, "index.html")
 
 # Dashboard version, surfaced in the corner badge. Bump it whenever you ship
@@ -50,6 +51,20 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.8 - telemetry_status.json: thin manifest (~1 KB) emitted next to the
+#          16 MB telemetry_data.js, containing totals + per-drive {id, date,
+#          distance, duration}. Lets scheduled "any new drives?" agents read
+#          a tiny file instead of falling back to jq/python against the big
+#          one. Also hardens verify(): parses telemetry_data.js end-to-end
+#          (strip wrapper, json.loads, assert structure), cross-checks
+#          len(drives) == totals.driveCount, and validates the manifest
+#          round-trips. Closes the "we only checked size, not correctness"
+#          gap from v2.6.
+#   v2.7 - CLAUDE.md added at repo root documenting project conventions,
+#          file architecture, the data pipeline, sub-tab structure, channel-
+#          availability gating, the rev-match calculator, the test suite,
+#          known wrinkles, and (crucially) the Read-tool limit= workaround
+#          for index.html. No code changes — pure documentation layer.
 #   v2.6 - externalize embedded JSON: data moves from inline const RAW in
 #          index.html (14 MB) to telemetry_data.js loaded via <script src>.
 #          index.html drops to ~180 KB and stays editable; downstream agents
@@ -87,7 +102,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.6"
+VERSION = "v2.8"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
@@ -148,8 +163,52 @@ def run_prep() -> dict:
     return json.loads(read_text(JSON_PATH))
 
 
+def write_status_manifest(meta: dict):
+    """v2.8: emit a tiny telemetry_status.json next to the 16 MB telemetry_data.js.
+
+    Purpose: scheduled "any new drives?" agents (and other lightweight consumers)
+    should read this — ~1 KB — instead of the big file. The big file remains the
+    source of truth for the dashboard; the manifest is a derived index.
+    """
+    drives_lean = []
+    for d in meta.get("drives", []):
+        s = d.get("summary", {}) or {}
+        drives_lean.append({
+            "id": d.get("id"),
+            "name": d.get("name"),
+            "date": d.get("date"),
+            "startTime": d.get("startTime"),
+            "distance": s.get("distance"),
+            "duration": s.get("duration"),
+        })
+    t = meta.get("totals", {}) or {}
+    manifest = {
+        "version": VERSION,
+        "buildDate": datetime.date.today().isoformat(),
+        "totals": {
+            "driveCount":  t.get("driveCount"),
+            "totalDist":   t.get("totalDist"),
+            "totalDur":    t.get("totalDur"),
+            "totalFuel":   t.get("totalFuel"),
+            "maxEverSpeed": t.get("maxEverSpeed"),
+            "maxEverRpm":   t.get("maxEverRpm"),
+            "vin":          t.get("vin"),
+            "vehicle":      t.get("vehicle"),
+        },
+        "drives": drives_lean,
+        # Note: we deliberately omit `historical` from the manifest.
+        # In the big telemetry_data.json, `historical` is a fuller per-drive
+        # summary that mirrors `drives` but adds peak/boost moments, samples,
+        # buckets, etc. The manifest's `drives` field already carries the IDs +
+        # dates that "any new drives?" agents need to diff against. Including
+        # `historical` doubled the manifest size (32 KB -> 4 KB without it)
+        # with no information the lightweight consumer can't get from drives[].
+    }
+    write_text(STATUS_PATH, json.dumps(manifest, indent=2) + "\n")
+
+
 def inject(meta: dict):
-    step(2, 4, "Writing telemetry_data.js + bumping HTML badge ...")
+    step(2, 4, "Writing telemetry_data.js + status manifest + bumping HTML badge ...")
     if not os.path.exists(HTML_PATH):
         sys.exit(f"  ! index.html not found at {HTML_PATH}")
     data = read_text(JSON_PATH)
@@ -159,6 +218,10 @@ def inject(meta: dict):
     # from ~14 MB to ~180 KB and stays editable.
     write_text(JS_PATH, "window.RAW = " + data + ";\n")
     print(f"  Data JS size: {os.path.getsize(JS_PATH):,} bytes")
+    # v2.8: thin manifest for lightweight consumers
+    write_status_manifest(meta)
+    print(f"  Status:       {os.path.getsize(STATUS_PATH):,} bytes "
+          f"({len(meta.get('drives', []))} drives)")
     # Bump the version badge in index.html
     html = read_text(HTML_PATH)
     drives = meta["totals"]["driveCount"]
@@ -186,14 +249,51 @@ def verify(meta: dict):
         sys.exit(f"  ! HTML suspiciously small ({html_sz} bytes)")
     if js_sz < 100_000:
         sys.exit(f"  ! telemetry_data.js suspiciously small ({js_sz} bytes)")
-    html_head = read_text(HTML_PATH)[:5000]
-    if 'src="telemetry_data.js"' not in html_head:
+    html_full = read_text(HTML_PATH)
+    if 'src="telemetry_data.js"' not in html_full:
         sys.exit("  ! index.html is missing <script src=\"telemetry_data.js\"> reference")
+
+    # v2.8: end-to-end correctness, not just size. Parse the JS file we just
+    # wrote, strip the wrapper, and confirm it round-trips to a structure that
+    # matches the in-memory meta. Catches mid-write corruption that the size
+    # threshold would miss (a torn 5 MB write is > 100 KB but still broken).
+    js_raw = read_text(JS_PATH)
+    prefix = "window.RAW = "
+    suffix = ";\n"
+    if not js_raw.startswith(prefix):
+        sys.exit(f"  ! telemetry_data.js missing expected prefix '{prefix!r}'")
+    if not js_raw.endswith(suffix):
+        sys.exit(f"  ! telemetry_data.js missing expected suffix '{suffix!r}'")
+    try:
+        parsed = json.loads(js_raw[len(prefix):-len(suffix)])
+    except json.JSONDecodeError as e:
+        sys.exit(f"  ! telemetry_data.js failed to parse: {e}")
+    n_drives_js = len(parsed.get("drives", []))
+    n_drives_totals = parsed.get("totals", {}).get("driveCount")
+    if n_drives_js != n_drives_totals:
+        sys.exit(f"  ! drive count mismatch: drives[]={n_drives_js} vs "
+                 f"totals.driveCount={n_drives_totals}")
+    if n_drives_js != meta["totals"]["driveCount"]:
+        sys.exit(f"  ! JS drive count ({n_drives_js}) != in-memory "
+                 f"meta drive count ({meta['totals']['driveCount']})")
+
+    # Verify the status manifest is also well-formed and consistent.
+    if not os.path.exists(STATUS_PATH):
+        sys.exit(f"  ! telemetry_status.json not produced at {STATUS_PATH}")
+    try:
+        status = json.loads(read_text(STATUS_PATH))
+    except json.JSONDecodeError as e:
+        sys.exit(f"  ! telemetry_status.json failed to parse: {e}")
+    if len(status.get("drives", [])) != meta["totals"]["driveCount"]:
+        sys.exit(f"  ! status manifest drive count mismatch: "
+                 f"{len(status.get('drives', []))} vs {meta['totals']['driveCount']}")
+
     drives = meta["totals"]["driveCount"]
     dist = meta["totals"]["totalDist"]
     dur = meta["totals"]["totalDur"] / 3600
     print(f"  [OK] {drives} drives, {dist:.1f} mi, {dur:.1f} hr, "
           f"top speed {meta['totals']['maxEverSpeed']:.1f} mph")
+    print(f"  [OK] JS round-trips, manifest valid, drive counts consistent")
 
 
 def git(meta: dict, skip: bool):

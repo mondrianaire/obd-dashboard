@@ -2,9 +2,9 @@
   "version": "v2.8",
   "buildDate": "2026-06-11",
   "totals": {
-    "driveCount": 24,
+    "driveCount": 25,
     "totalDist": 616.39,
-    "totalDur": 41601.0,
+    "totalDur": 41642.0,
     "totalFuel": 16.49,
     "maxEverSpeed": 92.6,
     "maxEverRpm": 5414.0,
@@ -203,6 +203,14 @@
       "startTime": "17:33:21",
       "distance": 0.792,
       "duration": 129.5
+    },
+    {
+      "id": "obd_fusion_2026_06_11_07_05",
+      "name": "OBD Fusion 2026-06-11 07:05",
+      "date": "2026-06-11",
+      "startTime": "07:05:51",
+      "distance": 0.0,
+      "duration": 40.1
     }
   ]
 }

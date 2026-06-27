@@ -931,7 +931,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
       </section>
 
 
-  <div class="version-badge" title="Dashboard build">v2.8 · build 2026-06-27 · 30 drives</div>
+  <div class="version-badge" title="Dashboard build">v2.9 · build 2026-06-27 · 30 drives</div>
 
   <footer class="dashboard-footer">
     <span id="footer-meta"></span>
@@ -2710,7 +2710,16 @@ class Dashboard{
     if (this.charts.gCircle && ch.imu) {
       // v2.5: filter to actually-moving samples; idle jostle in cupholder
       // contaminated the chart with phantom G-forces at 0 mph.
-      const pts = f.filter(r => r.ax != null && r.ay != null && (r.spd || 0) > 3);
+      // v2.9: also cap at 1.5 G total magnitude. Street tires top out around
+      // 1.1 G of grip; anything > 1.5 G is the phone moving (slipping out of
+      // a cradle, getting tossed on the seat). The June 9 drive had two
+      // ~9 G impulse events at highway cruise — physically impossible from
+      // driving, classic IMU bounce signature. 48.26 ft/s² = 1.5 G.
+      const G_CAP_FTPS2 = 1.5 * 32.174;
+      const pts = f.filter(r =>
+        r.ax != null && r.ay != null && (r.spd || 0) > 3 &&
+        Math.hypot(r.ax, r.ay) < G_CAP_FTPS2
+      );
       const samp = sample(pts, 1500);
       this.charts.gCircle.data.datasets[0].data = samp.map(r => ({
         x: r.ay / 32.174,

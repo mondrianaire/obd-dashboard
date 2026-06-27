@@ -51,6 +51,14 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.9 - G-circle magnitude cap. v2.5 filtered by speed > 3 mph to drop
+#          idle-cupholder jostle, but didn't catch highway-speed phone
+#          movements. The June 9 commute had two ~9 G impulse events at
+#          77 mph cruise (and ~470 samples > 1.5 G across the fleet) — all
+#          IMU artifacts from the phone slipping or being tossed. Added
+#          |G| < 1.5 cap to the filter. Reveals the actual driving envelope:
+#          asymmetric box bounded by ~1 G braking, ~0.5 G accel, ±1 G
+#          lateral. Pure dashboard-side fix; raw data untouched.
 #   v2.8 - telemetry_status.json: thin manifest (~1 KB) emitted next to the
 #          16 MB telemetry_data.js, containing totals + per-drive {id, date,
 #          distance, duration}. Lets scheduled "any new drives?" agents read
@@ -102,7 +110,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.8"
+VERSION = "v2.9"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

@@ -120,6 +120,20 @@ Health       - LTFT / coolant / knock-rate fleet trend bars, time-in-speed-band,
 
 The default sub-tab on first visit is **Drivetrain** in both views. On mobile, the default top-level view is **Fleet**.
 
+## Performance Mode (v2.10)
+
+Toggle button in the header (top-left, next to the h1). Adds `body.perf-mode` and reloads the page. State persisted in `localStorage['obd.perfMode']`.
+
+When on:
+
+- All styling is themed under `body.perf-mode` selectors — a MoTeC/AiM/VBOX pit-wall engineering-telemetry look (pure-black surfaces, thin cyan/yellow/red/green traces, monospace uppercase labels, sharp corners, no shadows).
+- `Chart.defaults` are set BEFORE the Dashboard class instantiates any chart, so all Chart.js canvases render on dark. If a new chart is added and it looks wrong under perf-mode, that's usually because it hardcodes a light color instead of using the `COL` palette (which switches under perf-mode) or Chart's inherited defaults.
+- The `Fuel & Air` and `Health` sub-tabs are hidden via CSS (`body.perf-mode .subtabs button[data-subtab="fuel"/"diag"]{display:none}`) plus their panels are hidden. When first entering perf-mode, the sub-tab localStorage is set to `engine` for both views so the user isn't stranded on a hidden panel.
+- Sub-tab order is Performance → Drivetrain → Overview via CSS `order:`.
+- The `.perf-telemetry-strip` div (right after the header) becomes visible and is populated by an inline script from `RAW.totals` + derived peak power. Cells: top speed, max RPM, peak power/torque/boost, max coolant, drives, distance.
+
+All CSS is a single scoped block near the end of `<style>`. Palette variables live under `:root` as `--perf-*`. Adding a new tile? It'll inherit the theme automatically as long as it uses `.chart-container`, `.cross-card`, or standard form elements.
+
 ## Conventions
 
 - **Versioning**: dashboard version is in `refresh_dashboard.py` (`VERSION = "v2.x"`) and surfaced in the corner badge. Bump on any meaningful UI/feature change. Changelog lives in the comment block above `VERSION`.

@@ -51,6 +51,16 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.10 - Performance Mode: F1 engineering-telemetry aesthetic toggle.
+#           Header button (persisted in localStorage) that adds body.perf-mode
+#           and reloads. In perf mode: pure-black surfaces, thin bright traces
+#           (cyan/yellow/red/green), monospace uppercase labels, sharp corners,
+#           MoTeC/AiM/VBOX pit-wall visual language. Chart.js defaults themed
+#           at load time so charts render correctly on dark canvases. Adds a
+#           telemetry strip at top with big monospace readouts (top speed,
+#           max RPM, peak power/torque/boost, max coolant, drive count,
+#           distance). Hides Fuel & Air + Health sub-tabs and reorders the
+#           remaining tabs so Performance leads. Zero effect on default mode.
 #   v2.9 - G-circle magnitude cap. v2.5 filtered by speed > 3 mph to drop
 #          idle-cupholder jostle, but didn't catch highway-speed phone
 #          movements. The June 9 commute had two ~9 G impulse events at
@@ -110,7 +120,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.9"
+VERSION = "v2.10"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

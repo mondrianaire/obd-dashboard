@@ -149,6 +149,233 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .data-table tbody td:first-child{text-align:left;font-weight:600;}
 .data-table tbody tr:hover{background:#f8f9fa;}
 .na{color:var(--grey);font-style:italic;}
+/* =========================================================
+   PERFORMANCE MODE (v2.10) - F1 engineering telemetry aesthetic
+   Reference: MoTeC i2, AiM Race Studio, VBOX pit-wall software.
+   All rules scoped under `body.perf-mode` so the default mode is
+   completely unaffected. Toggle is persisted in localStorage and
+   applied before Chart.js instantiation to theme charts.
+   ========================================================= */
+:root{
+  --perf-bg:#000; --perf-surface:#0A0A0A; --perf-border:#1F2937;
+  --perf-cyan:#00E1FF; --perf-yellow:#FFD700; --perf-red:#FF3333;
+  --perf-green:#00FF66; --perf-magenta:#FF00E1; --perf-orange:#FF8800;
+  --perf-text:#E8E8E8; --perf-dim:#666; --perf-mono:'JetBrains Mono','IBM Plex Mono','SF Mono',Menlo,Consolas,monospace;
+}
+.perf-toggle{
+  border:1px solid rgba(255,255,255,.35);background:transparent;
+  color:rgba(255,255,255,.9);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  padding:5px 11px;font-size:11px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;border-radius:4px;cursor:pointer;
+  transition:border-color .12s ease,background .12s ease,color .12s ease;
+}
+.perf-toggle:hover{border-color:rgba(255,255,255,.75);color:#fff;}
+.perf-telemetry-strip{display:none;}
+
+/* When Performance Mode is active, everything below is themed */
+body.perf-mode{
+  background:var(--perf-bg);color:var(--perf-text);
+  font-family:var(--perf-mono);
+  font-feature-settings:'tnum' 1,'ss01' 1;
+}
+body.perf-mode .dashboard-header{
+  background:var(--perf-surface);border:1px solid var(--perf-border);border-radius:0;
+  padding:14px 20px;
+}
+body.perf-mode .dashboard-header h1{
+  font-size:13px;font-weight:500;text-transform:uppercase;letter-spacing:.18em;
+  color:var(--perf-cyan);font-family:var(--perf-mono);
+}
+body.perf-mode .dashboard-header h1::before{content:'// ';color:var(--perf-dim);}
+body.perf-mode .header-sub,body.perf-mode .header-vehicle{
+  color:var(--perf-dim);font-size:10px;text-transform:uppercase;letter-spacing:.08em;
+}
+body.perf-mode .perf-toggle{
+  background:var(--perf-cyan);color:#000;border-color:var(--perf-cyan);
+  font-family:var(--perf-mono);font-weight:500;
+  box-shadow:0 0 8px rgba(0,225,255,.4);
+}
+body.perf-mode .perf-toggle:hover{background:#33E7FF;border-color:#33E7FF;}
+
+/* F1 Telemetry Strip - big monospace readouts at top */
+body.perf-mode .perf-telemetry-strip{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:0;
+  background:var(--perf-surface);border:1px solid var(--perf-border);
+  margin-bottom:var(--gap);padding:0;
+}
+.perf-telemetry-strip .cell{
+  padding:10px 14px;border-right:1px solid var(--perf-border);
+  display:flex;flex-direction:column;gap:4px;
+}
+.perf-telemetry-strip .cell:last-child{border-right:0;}
+.perf-telemetry-strip .lbl{
+  font-size:9px;color:var(--perf-dim);text-transform:uppercase;letter-spacing:.15em;
+  font-family:var(--perf-mono);
+}
+.perf-telemetry-strip .val{
+  font-size:20px;color:var(--perf-text);font-weight:400;line-height:1;
+  font-family:var(--perf-mono);white-space:nowrap;
+}
+.perf-telemetry-strip .val .unit{
+  font-size:10px;color:var(--perf-dim);margin-left:4px;letter-spacing:.05em;
+}
+.perf-telemetry-strip .val.cyan{color:var(--perf-cyan);}
+.perf-telemetry-strip .val.hot{color:var(--perf-yellow);}
+.perf-telemetry-strip .val.crit{color:var(--perf-red);}
+
+/* Fleet / Drive section bands */
+body.perf-mode .section{
+  background:var(--perf-bg)!important;border:1px solid var(--perf-border);border-radius:0;
+  padding:12px;margin-bottom:var(--gap);
+}
+body.perf-mode .section.fleet,body.perf-mode .section.drive{
+  background:var(--perf-bg)!important;border-color:var(--perf-border)!important;
+}
+body.perf-mode .section-banner{
+  border-bottom:1px solid var(--perf-border);padding-bottom:10px;margin-bottom:12px;
+}
+body.perf-mode .section-banner h2{
+  color:var(--perf-text);font-size:12px;font-weight:500;
+  text-transform:uppercase;letter-spacing:.12em;font-family:var(--perf-mono);
+}
+body.perf-mode .section-banner .tag{
+  background:var(--perf-bg);border:1px solid var(--perf-yellow);color:var(--perf-yellow);
+  border-radius:0;font-family:var(--perf-mono);letter-spacing:.1em;
+}
+body.perf-mode .section-banner.drive .tag{border-color:var(--perf-cyan);color:var(--perf-cyan);}
+body.perf-mode .section-banner .crumb{color:var(--perf-dim);font-size:10px;text-transform:uppercase;letter-spacing:.05em;}
+
+/* Cross-cards (KPI cards at top of Fleet) */
+body.perf-mode .cross-card{
+  background:var(--perf-surface);border:1px solid var(--perf-border);
+  border-left:2px solid var(--perf-cyan);
+  border-radius:0;box-shadow:none;padding:12px 14px;
+}
+body.perf-mode .cross-card .l{
+  color:var(--perf-dim);font-size:9px;letter-spacing:.15em;font-family:var(--perf-mono);
+}
+body.perf-mode .cross-card .v{
+  color:var(--perf-text);font-family:var(--perf-mono);font-weight:400;
+  font-size:20px;
+}
+body.perf-mode .cross-card .s{color:var(--perf-dim);font-family:var(--perf-mono);font-size:10px;}
+
+/* Chart containers - the fundamental tile */
+body.perf-mode .chart-container{
+  background:var(--perf-surface);border:1px solid var(--perf-border);
+  border-radius:0;box-shadow:none;padding:14px 16px;
+}
+body.perf-mode .chart-container h3{
+  color:var(--perf-text);font-size:11px;font-weight:500;
+  text-transform:uppercase;letter-spacing:.12em;font-family:var(--perf-mono);
+}
+body.perf-mode .chart-container h3::before{content:'▸ ';color:var(--perf-cyan);}
+body.perf-mode .chart-note{
+  color:var(--perf-dim);font-size:11px;font-family:var(--perf-mono);
+  line-height:1.5;
+}
+body.perf-mode .chart-note strong{color:var(--perf-text);font-weight:500;}
+body.perf-mode .chart-disabled-msg{color:var(--perf-dim);font-family:var(--perf-mono);}
+body.perf-mode .chart-container.disabled{opacity:.4;}
+
+/* Sub-tab bar */
+body.perf-mode .subtabs{
+  border-bottom:1px solid var(--perf-border);gap:0;display:flex;
+  margin-bottom:12px;
+}
+body.perf-mode .subtabs button{
+  color:var(--perf-dim);background:transparent;border:0;border-radius:0;
+  border-bottom:2px solid transparent;
+  text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:500;
+  font-family:var(--perf-mono);padding:10px 14px;cursor:pointer;
+}
+body.perf-mode .subtabs button:hover{color:var(--perf-text);}
+body.perf-mode .subtabs button.active{
+  color:var(--perf-cyan);border-bottom-color:var(--perf-cyan);
+}
+
+/* Hide non-performance sub-tabs in perf mode */
+body.perf-mode .subtabs button[data-subtab="fuel"],
+body.perf-mode .subtabs button[data-subtab="diag"]{display:none;}
+body.perf-mode .subtab-panel[data-subtab="fuel"],
+body.perf-mode .subtab-panel[data-subtab="diag"]{display:none!important;}
+
+/* Reorder tabs: Performance first, then Drivetrain, then Overview */
+body.perf-mode .subtabs button[data-subtab="engine"]{order:1;}
+body.perf-mode .subtabs button[data-subtab="drivetrain"]{order:2;}
+body.perf-mode .subtabs button[data-subtab="overview"]{order:3;}
+
+/* Mobile tabs (Drive / Fleet) */
+body.perf-mode .mobile-tabs{
+  background:var(--perf-surface);border:1px solid var(--perf-border);border-radius:0;
+}
+body.perf-mode .mobile-tabs button{
+  color:var(--perf-dim);background:transparent;border-radius:0;
+  text-transform:uppercase;letter-spacing:.12em;font-family:var(--perf-mono);
+  font-size:11px;font-weight:500;
+}
+body.perf-mode .mobile-tabs button.active{color:#000;background:var(--perf-cyan);}
+
+/* Filter header (the "From/To" band in Drive view) */
+body.perf-mode #filter-header{
+  background:var(--perf-surface);border:1px solid var(--perf-border);
+}
+
+/* Form controls: selects, inputs, buttons */
+body.perf-mode select,body.perf-mode input,body.perf-mode textarea{
+  background:var(--perf-bg);color:var(--perf-text);border:1px solid var(--perf-border);
+  border-radius:0;font-family:var(--perf-mono);font-size:12px;
+}
+body.perf-mode select:focus,body.perf-mode input:focus{
+  outline:none;border-color:var(--perf-cyan);
+}
+body.perf-mode .mode-toggle{border:1px solid var(--perf-border);border-radius:0;}
+body.perf-mode .mode-toggle button{
+  background:var(--perf-bg);color:var(--perf-dim);font-family:var(--perf-mono);
+  border-radius:0;letter-spacing:.08em;text-transform:uppercase;
+}
+body.perf-mode .mode-toggle button.active{background:var(--perf-cyan);color:#000;}
+body.perf-mode .compare-controls label{color:var(--perf-dim);font-family:var(--perf-mono);
+  font-size:10px;text-transform:uppercase;letter-spacing:.1em;}
+
+/* Tables */
+body.perf-mode table{color:var(--perf-text);font-family:var(--perf-mono);}
+body.perf-mode th{
+  background:var(--perf-surface)!important;color:var(--perf-dim)!important;
+  text-transform:uppercase;letter-spacing:.1em;font-family:var(--perf-mono);
+  font-size:10px;font-weight:500;border-color:var(--perf-border)!important;
+}
+body.perf-mode td{
+  border-color:var(--perf-border)!important;font-family:var(--perf-mono);font-size:11px;
+  background:var(--perf-surface)!important;
+}
+body.perf-mode tr:hover td{background:#151519!important;}
+
+/* Version badge */
+body.perf-mode .version-badge{
+  background:rgba(0,0,0,.92);color:var(--perf-dim);border:1px solid var(--perf-border);
+  border-radius:0;font-family:var(--perf-mono);font-size:10px;letter-spacing:.05em;
+  text-transform:uppercase;
+}
+body.perf-mode .version-badge:hover{color:var(--perf-cyan);background:rgba(0,0,0,.98);}
+
+/* Rev-match card + KPI strips + engine-health chips get dark surfaces */
+body.perf-mode .revmatch-card,body.perf-mode .shift-kpi-row,
+body.perf-mode .engine-health-chip,body.perf-mode .peak-moments-tile,
+body.perf-mode .kpi-strip,body.perf-mode .notable-list,
+body.perf-mode .highlights-card{
+  background:var(--perf-surface)!important;border-color:var(--perf-border)!important;
+  color:var(--perf-text)!important;
+}
+body.perf-mode .drive-selector,body.perf-mode #drive-select{
+  background:var(--perf-bg);color:var(--perf-text);border:1px solid var(--perf-border);
+}
+
+/* Anything else with a light background - be aggressive */
+body.perf-mode .cross-row>*,body.perf-mode .compare-row>*{
+  color:var(--perf-text);
+}
+
 .version-badge{position:fixed;bottom:8px;right:10px;z-index:9999;
   font-size:10.5px;font-family:ui-monospace,Menlo,Consolas,monospace;
   color:rgba(33,37,41,.45);background:rgba(255,255,255,.78);
@@ -346,11 +573,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 
   <header class="dashboard-header">
     <div class="header-top">
-      <h1>Drive Telemetry Dashboard</h1>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <h1>Drive Telemetry Dashboard</h1>
+        <button id="perf-toggle-btn" class="perf-toggle" type="button"
+                title="Toggle Performance Mode (F1 engineering telemetry aesthetic)">Perf mode</button>
+      </div>
       <span class="header-sub" id="hdr-meta"></span>
     </div>
     <div class="header-vehicle" id="hdr-vehicle"></div>
   </header>
+
+  <!-- v2.10: F1-style telemetry strip. Only visible when body.perf-mode is on. -->
+  <div class="perf-telemetry-strip" id="perf-strip" aria-hidden="true"></div>
 
   <nav class="mobile-tabs" id="mobile-tabs" role="tablist" aria-label="View switcher">
     <button data-tab="drive" role="tab" aria-selected="false">Drive</button>
@@ -931,7 +1165,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
       </section>
 
 
-  <div class="version-badge" title="Dashboard build">v2.9 · build 2026-07-27 · 47 drives</div>
+  <div class="version-badge" title="Dashboard build">v2.10 · build 2026-07-27 · 47 drives</div>
 
   <footer class="dashboard-footer">
     <span id="footer-meta"></span>
@@ -949,7 +1183,87 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 <script src="telemetry_data.js"></script>
 <script>
 const RAW = window.RAW;
-const COL={blue:'#1d6fb8',red:'#e63946',green:'#2a9d8f',amber:'#e9a000',grey:'#9aa0a6',ink:'#1a1a2e',purple:'#7c3aed',teal:'#0891b2'};
+
+// =========================================================
+// v2.10: Performance Mode (F1 engineering telemetry aesthetic)
+// Must run BEFORE Chart.defaults is used or any chart is created,
+// so the theme is baked into charts at instantiation. Toggle
+// triggers a full page reload to guarantee a clean re-theme.
+// =========================================================
+const PERF_KEY = 'obd.perfMode';
+const PERF_MODE = (function(){
+  try { return localStorage.getItem(PERF_KEY) === '1'; } catch(e){ return false; }
+})();
+if (PERF_MODE) {
+  document.body.classList.add('perf-mode');
+  // Chart.js defaults for the engineering-telemetry aesthetic
+  if (typeof Chart !== 'undefined') {
+    Chart.defaults.color = '#888';
+    Chart.defaults.borderColor = '#1F2937';
+    Chart.defaults.font.family = "'JetBrains Mono','IBM Plex Mono','SF Mono',Menlo,Consolas,monospace";
+    Chart.defaults.font.size = 10;
+    // Grid lines subtler; axis titles brighter
+    if (Chart.defaults.scale && Chart.defaults.scale.grid) {
+      Chart.defaults.scale.grid.color = 'rgba(255,255,255,0.05)';
+    }
+    if (Chart.defaults.plugins && Chart.defaults.plugins.legend) {
+      Chart.defaults.plugins.legend.labels = Chart.defaults.plugins.legend.labels || {};
+      Chart.defaults.plugins.legend.labels.color = '#888';
+    }
+  }
+}
+// Palette. In perf-mode, override the categorical colors with F1-telemetry brights.
+const COL = PERF_MODE
+  ? {blue:'#00E1FF',red:'#FF3333',green:'#00FF66',amber:'#FFD700',grey:'#666',ink:'#E8E8E8',purple:'#FF00E1',teal:'#00E1FF'}
+  : {blue:'#1d6fb8',red:'#e63946',green:'#2a9d8f',amber:'#e9a000',grey:'#9aa0a6',ink:'#1a1a2e',purple:'#7c3aed',teal:'#0891b2'};
+
+// Wire up the toggle button + populate the telemetry strip
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('perf-toggle-btn');
+  if (btn) {
+    btn.textContent = PERF_MODE ? '● Telemetry' : 'Perf mode';
+    btn.addEventListener('click', function(){
+      const nowOn = !PERF_MODE;
+      try { localStorage.setItem(PERF_KEY, nowOn ? '1' : '0'); } catch(e){}
+      // When entering perf-mode, land on Performance sub-tab (the "engine" key)
+      // so the user isn't stranded on a hidden Fuel/Health tab.
+      if (nowOn) {
+        try {
+          localStorage.setItem('obd.subtab.fleet', 'engine');
+          localStorage.setItem('obd.subtab.drive', 'engine');
+        } catch(e){}
+      }
+      location.reload();
+    });
+  }
+  // Populate the F1 telemetry strip when perf-mode is active
+  if (PERF_MODE) {
+    const strip = document.getElementById('perf-strip');
+    if (strip && RAW && RAW.totals) {
+      const t = RAW.totals;
+      // Fleet-wide peak power isn't in totals; derive from per-drive summaries
+      const maxPwr = (RAW.drives||[]).reduce((m,d) => {
+        const p = (d && d.summary && d.summary.peakPwr) || 0;
+        return p > m ? p : m;
+      }, 0);
+      const cell = (lbl, val, unit, cls) =>
+        `<div class="cell"><span class="lbl">${lbl}</span>`
+        + `<span class="val ${cls||''}">${val}${unit?`<span class="unit">${unit}</span>`:''}</span></div>`;
+      strip.innerHTML = [
+        cell('Top speed',  (t.maxEverSpeed||0).toFixed(1), 'MPH',  'cyan'),
+        cell('Max RPM',    Math.round(t.maxEverRpm||0),    'RPM',  'cyan'),
+        cell('Peak power', Math.round(maxPwr),             'HP',   'hot'),
+        cell('Peak torque',Math.round(t.maxEverTq||0),     'LB·FT','hot'),
+        cell('Peak boost', (t.maxEverBoost||0).toFixed(1), 'PSI',  'hot'),
+        cell('Max coolant',Math.round(t.maxEverCoolant||0),'°F',   'crit'),
+        cell('Drives',     t.driveCount||0,                ''),
+        cell('Distance',   Math.round(t.totalDist||0),     'MI'),
+      ].join('');
+      strip.setAttribute('aria-hidden', 'false');
+    }
+  }
+});
+
 
 function fmtTime(sec){const m=Math.floor(sec/60),s=Math.round(sec%60);return m+':'+String(s).padStart(2,'0');}
 function fmtDur(sec){if(sec>=3600)return (sec/3600).toFixed(1)+' hr';return fmtTime(sec);}

@@ -51,6 +51,21 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.11 - Performance Mode gets FUNCTIONAL F1-telemetry views, not just
+#           a reskin. Adds two perf-mode-only tiles at the top of the
+#           Drive Performance sub-tab:
+#           (1) Master telemetry — multi-channel stacked chart (Speed +
+#               RPM + Throttle-fill + Boost) on a single time axis with
+#               shared hover. Four Y-axes (2 visible, 2 hidden), auto-fit
+#               scales, ~1500-point stride for snappy rendering. THE F1
+#               engineering-telemetry archetype.
+#           (2) Sector analysis — drive split into ~2-mile equal-distance
+#               sectors (3-15 total), with per-sector peak/avg mph, peak
+#               RPM/G/boost/HP, duration. Yellow highlights the fastest
+#               sector, red the slowest. F1 sector-timing style.
+#           .perf-only CSS class + body.perf-mode override handles visibility.
+#           New buildV211Charts + updateV211Charts + buildSectorTable
+#           wired into init and renderDrive alongside the existing v2.0/2.1.
 #   v2.10 - Performance Mode: F1 engineering-telemetry aesthetic toggle.
 #           Header button (persisted in localStorage) that adds body.perf-mode
 #           and reloads. In perf mode: pure-black surfaces, thin bright traces
@@ -120,7 +135,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.10"
+VERSION = "v2.11"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

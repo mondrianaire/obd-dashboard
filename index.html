@@ -376,6 +376,40 @@ body.perf-mode .cross-row>*,body.perf-mode .compare-row>*{
   color:var(--perf-text);
 }
 
+/* v2.11: perf-mode-only tiles + non-perf tile hiding */
+.perf-only{display:none!important;}
+body.perf-mode .perf-only{display:block!important;}
+body.perf-mode .perf-hide{display:none!important;}
+
+/* Sector analysis table (F1-style dense telemetry table) */
+body.perf-mode .sector-table{
+  width:100%;border-collapse:collapse;font-family:var(--perf-mono);
+  font-size:11px;color:var(--perf-text);
+}
+body.perf-mode .sector-table th{
+  background:#0F0F14!important;color:var(--perf-dim)!important;
+  text-transform:uppercase;letter-spacing:.12em;font-size:9px;font-weight:500;
+  padding:8px 10px;text-align:right;border-bottom:1px solid var(--perf-border);
+}
+body.perf-mode .sector-table th:first-child{text-align:left;}
+body.perf-mode .sector-table td{
+  padding:6px 10px;border-bottom:1px solid #14161B;text-align:right;
+  background:transparent!important;font-variant-numeric:tabular-nums;
+}
+body.perf-mode .sector-table td:first-child{
+  text-align:left;color:var(--perf-cyan);font-weight:500;
+}
+body.perf-mode .sector-table tr:hover td{background:#0F0F14!important;}
+body.perf-mode .sector-table .bar-cell{position:relative;}
+body.perf-mode .sector-table .bar{
+  position:absolute;left:0;top:0;bottom:0;
+  background:linear-gradient(90deg,transparent,rgba(0,225,255,.12));
+  z-index:0;pointer-events:none;
+}
+body.perf-mode .sector-table .val{position:relative;z-index:1;}
+body.perf-mode .sector-table .fastest{color:var(--perf-yellow);}
+body.perf-mode .sector-table .slowest{color:var(--perf-red);}
+
 .version-badge{position:fixed;bottom:8px;right:10px;z-index:9999;
   font-size:10.5px;font-family:ui-monospace,Menlo,Consolas,monospace;
   color:rgba(33,37,41,.45);background:rgba(255,255,255,.78);
@@ -903,6 +937,24 @@ body.perf-mode .cross-row>*,body.perf-mode .compare-row>*{
     </div>
 
     <div class="subtab-panel" data-subtab="engine" hidden>
+      <!-- v2.11: PERF-MODE ONLY - Master telemetry (F1 stacked-channel view) -->
+      <section class="chart-row row-1 perf-only">
+        <div class="chart-container" data-needs="rpm">
+          <h3>Master telemetry &mdash; multi-channel</h3>
+          <div class="chart-note">Speed, RPM, throttle (filled), and boost on a single time axis. F1 engineering-telemetry style &mdash; every input and output aligned by moment. Hover for full readout.</div>
+          <div class="canvas-wrap" style="height:340px;"><canvas id="masterTelemetryChart"></canvas></div>
+          <div class="chart-disabled-msg">No RPM channel in this drive.</div>
+        </div>
+      </section>
+      <!-- v2.11: PERF-MODE ONLY - Sector analysis (F1 sector-timing style) -->
+      <section class="chart-row row-1 perf-only">
+        <div class="chart-container" data-needs="rpm">
+          <h3>Sector analysis &mdash; distance splits</h3>
+          <div class="chart-note">Drive split into equal-distance sectors (~2 mi each). Per-sector peak / average / peak-G / peak-boost / peak-HP. Yellow = fastest sector, red = slowest. F1 sector-timing style.</div>
+          <div class="table-scroll" style="max-height:none;"><table class="sector-table" id="sectorTable"></table></div>
+          <div class="chart-disabled-msg">No RPM channel in this drive.</div>
+        </div>
+      </section>
       <section class="chart-row row-1">
         <div class="chart-container">
           <h3>Peak moments &mdash; this drive</h3>
@@ -1165,7 +1217,7 @@ body.perf-mode .cross-row>*,body.perf-mode .compare-row>*{
       </section>
 
 
-  <div class="version-badge" title="Dashboard build">v2.10 · build 2026-07-27 · 47 drives</div>
+  <div class="version-badge" title="Dashboard build">v2.11 · build 2026-07-27 · 47 drives</div>
 
   <footer class="dashboard-footer">
     <span id="footer-meta"></span>
@@ -1511,6 +1563,7 @@ class Dashboard{
     this.buildV18Charts();
     this.buildV20Charts();
     this.buildV21Charts();
+    this.buildV211Charts();  // v2.11: master telemetry + sector analysis (perf-mode)
     this.bindDriveChip();
     this.buildSmallMultiples();
     this.renderDrive();
@@ -1943,6 +1996,7 @@ class Dashboard{
     this.updateV18Charts();
     this.updateV20Charts();
     this.updateV21Charts();
+    this.updateV211Charts();  // v2.11: master telemetry + sector analysis (perf-mode)
     this.updateGearHist();
     this.updateShiftSection();
     this.renderTable();
@@ -3468,6 +3522,173 @@ class Dashboard{
     // Fleet uses all rows across all drives
     const all = detectShifts(this.allRows());
     this.updateEconShifts(all, this.charts.fleetEconRegime, this.charts.fleetEconPair, 'fleet-econ-kpi-row', 'fleet');
+  }
+
+  // v2.11: F1 engineering-telemetry views (perf-mode-only tiles)
+  buildV211Charts(){
+    const el = document.getElementById('masterTelemetryChart');
+    if (!el) return;
+    // Cyan speed, yellow RPM, translucent-green throttle fill, red boost.
+    // Four Y-axes (2 visible + 2 hidden) so each channel keeps its native units.
+    this.charts.masterTelemetry = new Chart(el, {
+      type: 'line',
+      data: { datasets: [
+        { label:'Speed (mph)', yAxisID:'ySpd', data:[], borderColor:'#00E1FF',
+          borderWidth:1.5, pointRadius:0, tension:.15, order:2 },
+        { label:'RPM',         yAxisID:'yRpm', data:[], borderColor:'#FFD700',
+          borderWidth:1.2, pointRadius:0, tension:.15, order:3 },
+        { label:'Throttle (%)',yAxisID:'yThr', data:[], borderColor:'rgba(0,255,102,0.55)',
+          backgroundColor:'rgba(0,255,102,0.13)', borderWidth:1, pointRadius:0,
+          fill:true, tension:0, order:4 },
+        { label:'Boost (psi)', yAxisID:'yBoost', data:[], borderColor:'#FF3333',
+          borderWidth:1.3, pointRadius:0, tension:.1, order:1 },
+      ]},
+      options: {
+        responsive:true, maintainAspectRatio:false, animation:false,
+        parsing:false, normalized:true,
+        interaction:{mode:'nearest', intersect:false, axis:'x'},
+        plugins:{
+          legend:{position:'top', align:'end', labels:{boxWidth:10, boxHeight:2, font:{size:10}}},
+          tooltip:{mode:'index', intersect:false,
+            callbacks:{
+              title:(items) => 'T + ' + Math.round(items[0].parsed.x) + ' s',
+              label:(item) => item.dataset.label + ':  ' + item.parsed.y.toFixed(1),
+            }
+          }
+        },
+        scales:{
+          x:{type:'linear', title:{display:true, text:'Time (s from start)', font:{size:10}},
+             ticks:{font:{size:10}, maxTicksLimit:10}},
+          ySpd:{type:'linear', position:'left', min:0, max:100,
+                title:{display:true, text:'MPH  /  Throttle %', font:{size:10}},
+                ticks:{font:{size:10}, color:'#00E1FF'}},
+          yRpm:{type:'linear', position:'right', min:0, max:7000,
+                title:{display:true, text:'RPM  /  Boost psi', font:{size:10}},
+                ticks:{font:{size:10}, color:'#FFD700'},
+                grid:{drawOnChartArea:false}},
+          yThr:{type:'linear', position:'left', min:0, max:100, display:false},
+          yBoost:{type:'linear', position:'right', min:-5, max:25, display:false,
+                  grid:{drawOnChartArea:false}},
+        }
+      }
+    });
+  }
+
+  updateV211Charts(){
+    const d = this.currentDrive();
+    if (!d || !d.channels || !d.channels.rpm) return;
+    const rows = this.filtered();
+    if (!rows.length) return;
+
+    // ----- Master telemetry -----
+    if (this.charts.masterTelemetry) {
+      const t0 = rows[0].t || 0;
+      // Downsample when > 1500 samples so hover is snappy
+      const stride = Math.max(1, Math.floor(rows.length / 1500));
+      const ds = [];
+      for (let i = 0; i < rows.length; i += stride) ds.push(rows[i]);
+      const spd = [], rpm = [], thr = [], bst = [];
+      let spdMax = 0, rpmMax = 0;
+      ds.forEach(r => {
+        const x = (r.t || 0) - t0;
+        if (r.spd != null) { spd.push({x, y:r.spd}); if (r.spd > spdMax) spdMax = r.spd; }
+        if (r.rpm != null) { rpm.push({x, y:r.rpm}); if (r.rpm > rpmMax) rpmMax = r.rpm; }
+        if (r.thr != null) thr.push({x, y:r.thr});
+        if (r.boost != null) bst.push({x, y:r.boost});
+      });
+      const c = this.charts.masterTelemetry;
+      c.data.datasets[0].data = spd;
+      c.data.datasets[1].data = rpm;
+      c.data.datasets[2].data = thr;
+      c.data.datasets[3].data = bst;
+      // Auto-fit Y-axis ceilings so short low-speed drives don't waste chart area
+      c.options.scales.ySpd.max = Math.max(60, Math.ceil((spdMax+5)/10)*10);
+      c.options.scales.yRpm.max = Math.max(4000, Math.ceil((rpmMax+500)/1000)*1000);
+      c.update();
+    }
+
+    // ----- Sector analysis -----
+    this.buildSectorTable(rows);
+  }
+
+  buildSectorTable(rows){
+    const tbl = document.getElementById('sectorTable');
+    if (!tbl) return;
+    if (!rows.length) { tbl.innerHTML = ''; return; }
+
+    // Cumulative distance in miles (1Hz buckets, speed in mph)
+    let cum = 0;
+    const withDist = rows.map(r => {
+      cum += (r.spd || 0) / 3600;   // mph * (1s / 3600 s per hr) = miles this second
+      return { ...r, cumMi: cum };
+    });
+    const totalMi = cum;
+    if (totalMi < 0.5) { tbl.innerHTML = '<tbody><tr><td>Drive too short for sectoring.</td></tr></tbody>'; return; }
+
+    // Aim for ~2-mile sectors, clamp to 3-15 total
+    const nSectors = Math.min(15, Math.max(3, Math.round(totalMi / 2)));
+    const sectorMi = totalMi / nSectors;
+    const sectors = [];
+    for (let i = 0; i < nSectors; i++) {
+      sectors.push({idx:i+1, from:i*sectorMi, to:(i+1)*sectorMi, rows:[]});
+    }
+    withDist.forEach(r => {
+      const i = Math.min(nSectors-1, Math.floor(r.cumMi / sectorMi));
+      sectors[i].rows.push(r);
+    });
+
+    // Compute per-sector metrics
+    const stats = sectors.map(s => {
+      const rs = s.rows;
+      const peakSpd = rs.reduce((m,r) => (r.spd||0) > m ? r.spd : m, 0);
+      const avgSpd = rs.length ? rs.reduce((a,r) => a + (r.spd||0), 0) / rs.length : 0;
+      const durS = rs.length;   // 1Hz buckets → seconds
+      const peakG = rs.reduce((m,r) => {
+        if (r.ax == null || r.ay == null) return m;
+        // ax/ay stored in m/s²; convert to G by /9.81. Cap at 1.5 G to drop artifacts.
+        const g = Math.hypot(r.ax, r.ay) / 9.81;
+        return (g < 1.5 && g > m) ? g : m;
+      }, 0);
+      const peakBoost = rs.reduce((m,r) => (r.boost||0) > m ? r.boost : m, 0);
+      const peakPwr = rs.reduce((m,r) => (r.pwr||0) > m ? r.pwr : m, 0);
+      const peakRpm = rs.reduce((m,r) => (r.rpm||0) > m ? r.rpm : m, 0);
+      return {...s, peakSpd, avgSpd, durS, peakG, peakBoost, peakPwr, peakRpm};
+    });
+
+    // Identify fastest / slowest sector by peak speed for color coding
+    const spds = stats.map(s => s.peakSpd);
+    const maxIdx = spds.indexOf(Math.max(...spds));
+    const minIdx = spds.indexOf(Math.min(...spds.filter(v => v > 0)));
+    const maxAvg = Math.max(...stats.map(s => s.avgSpd));
+
+    const fmtDur = s => {
+      const m = Math.floor(s/60), sec = Math.round(s%60);
+      return m + ':' + String(sec).padStart(2,'0');
+    };
+
+    let html = '<thead><tr>'
+      + '<th>Sector</th><th>Range (mi)</th><th>Duration</th>'
+      + '<th>Peak MPH</th><th>Avg MPH</th><th>Peak RPM</th>'
+      + '<th>Peak G</th><th>Peak PSI</th><th>Peak HP</th>'
+      + '</tr></thead><tbody>';
+    stats.forEach((s, i) => {
+      const cls = i === maxIdx ? 'fastest' : (i === minIdx && s.peakSpd > 0 ? 'slowest' : '');
+      const barPct = maxAvg > 0 ? Math.round(100 * s.avgSpd / maxAvg) : 0;
+      html += '<tr>'
+        + `<td>S${s.idx}</td>`
+        + `<td>${s.from.toFixed(1)} → ${s.to.toFixed(1)}</td>`
+        + `<td>${fmtDur(s.durS)}</td>`
+        + `<td class="${cls}">${s.peakSpd.toFixed(0)}</td>`
+        + `<td class="bar-cell"><span class="bar" style="width:${barPct}%"></span>`
+          + `<span class="val">${s.avgSpd.toFixed(0)}</span></td>`
+        + `<td>${s.peakRpm ? Math.round(s.peakRpm).toLocaleString() : '—'}</td>`
+        + `<td>${s.peakG > 0 ? s.peakG.toFixed(2) : '—'}</td>`
+        + `<td>${s.peakBoost > 0 ? s.peakBoost.toFixed(1) : '—'}</td>`
+        + `<td>${s.peakPwr > 0 ? Math.round(s.peakPwr) : '—'}</td>`
+        + '</tr>';
+    });
+    html += '</tbody>';
+    tbl.innerHTML = html;
   }
 
   bindSubTabs(){

@@ -50,6 +50,23 @@ def clean_time_csv(df, col='time', fmt='%H:%M:%S.%f', min_span=10.0):
     return df.iloc[0:0]
 
 
+# Physically-plausible ranges per channel (mirrors BOUNDS in tests/test_dataviews.py).
+# OBD adapter startup transients report garbage (baro 1.4 inHg, volt 0.6 V, lambda 0.1)
+# in the first seconds of a log; anything outside these ranges is nulled at ingest so
+# it never reaches charts, aggregates, or the regression suite.
+PLAUSIBLE = {
+    'rpm':     (0, 7500),   'spd':     (-1, 200),  'thr':     (-1, 105),
+    'coolant': (-40, 260),  'iat':     (-40, 280), 'amb':     (-40, 130),
+    'icTempF': (-40, 280),  'catTemp': (0, 2000),  'map':     (-5, 50),
+    'boost':   (-20, 35),   'baro':    (20, 35),   'afrA':    (5, 35),
+    'afrC':    (5, 35),     'lambda':  (0.4, 2.5), 'load':    (-1, 105),
+    'stft':    (-30, 30),   'ltft':    (-30, 30),  'ign':     (-40, 60),
+    'maf':     (0, 30),     'tq':      (-50, 350), 'pwr':     (-10, 350),
+    'fuel':    (0, 15),     'railPsi': (0, 4000),  'volt':    (8, 16),
+    'alt':     (-500, 16000), 'fuelLvl': (-1, 105),
+}
+
+
 def bucket(rows, channels, name, date, startTime, source):
     df = pd.DataFrame(rows)
     # Canonical column list. Anything missing in `rows` is created as NaN so the
@@ -62,6 +79,12 @@ def bucket(rows, channels, name, date, startTime, source):
               'icTempF','amb','ax','ay','az','fuelLvl']:
         if c not in df.columns:
             df[c] = np.nan
+    # Null physically-impossible readings (startup transients) before any
+    # ffill/aggregation so they never propagate. NaNs pass through untouched.
+    for c, (lo, hi) in PLAUSIBLE.items():
+        if c in df.columns:
+            v = pd.to_numeric(df[c], errors='coerce')
+            df[c] = v.mask((v < lo) | (v > hi))
     df['dt'] = df['t'].diff().fillna(0).clip(0, 2.0)
     for c in ['spd','rpm','thr','pwr','fuel','boost','acc']:
         df[c] = pd.to_numeric(df[c], errors='coerce').ffill()

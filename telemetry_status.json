@@ -2,11 +2,11 @@
   "version": "v2.11",
   "buildDate": "2026-08-05",
   "totals": {
-    "driveCount": 51,
-    "totalDist": 1418.1,
-    "totalDur": 91862.0,
-    "totalFuel": 39.979,
-    "maxEverSpeed": 94.4,
+    "driveCount": 55,
+    "totalDist": 1538.1,
+    "totalDur": 99360.0,
+    "totalFuel": 43.506,
+    "maxEverSpeed": 100.4,
     "maxEverRpm": 5594.0,
     "vin": "3VW5T7AU2GM058168",
     "vehicle": "2016 VW Golf GTI (2.0T EA888)"
@@ -365,12 +365,28 @@
       "duration": 665.0
     },
     {
+      "id": "obd_fusion_2026_07_25_17_59",
+      "name": "OBD Fusion 2026-07-25 17:59",
+      "date": "2026-07-25",
+      "startTime": "17:59:54",
+      "distance": 6.293,
+      "duration": 690.0
+    },
+    {
       "id": "obd_fusion_2026_07_25_18_41",
       "name": "OBD Fusion 2026-07-25 18:41",
       "date": "2026-07-25",
       "startTime": "18:41:50",
       "distance": 1.463,
       "duration": 224.3
+    },
+    {
+      "id": "obd_fusion_2026_07_25_18_59",
+      "name": "OBD Fusion 2026-07-25 18:59",
+      "date": "2026-07-25",
+      "startTime": "18:59:04",
+      "distance": 2.324,
+      "duration": 245.2
     },
     {
       "id": "obd_fusion_2026_07_26_14_28",
@@ -405,6 +421,14 @@
       "duration": 2692.0
     },
     {
+      "id": "obd_fusion_2026_07_29_15_43",
+      "name": "OBD Fusion 2026-07-29 15:43",
+      "date": "2026-07-29",
+      "startTime": "15:43:30",
+      "distance": 42.566,
+      "duration": 2439.0
+    },
+    {
       "id": "obd_fusion_2026_07_30_18_22",
       "name": "OBD Fusion 2026-07-30 18:22",
       "date": "2026-07-30",
@@ -419,6 +443,14 @@
       "startTime": "20:35:48",
       "distance": 7.045,
       "duration": 891.0
+    },
+    {
+      "id": "obd_fusion_2026_08_05_13_54",
+      "name": "OBD Fusion 2026-08-05 13:54",
+      "date": "2026-08-05",
+      "startTime": "13:54:53",
+      "distance": 68.817,
+      "duration": 4124.0
     }
   ]
 }

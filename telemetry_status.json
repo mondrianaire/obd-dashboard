@@ -2,10 +2,10 @@
   "version": "v2.11",
   "buildDate": "2026-08-13",
   "totals": {
-    "driveCount": 61,
-    "totalDist": 1627.09,
-    "totalDur": 106114.0,
-    "totalFuel": 46.475,
+    "driveCount": 62,
+    "totalDist": 1634.06,
+    "totalDur": 106904.0,
+    "totalFuel": 46.752,
     "maxEverSpeed": 100.4,
     "maxEverRpm": 5658.0,
     "vin": "3VW5T7AU2GM058168",
@@ -499,6 +499,14 @@
       "startTime": "20:33:57",
       "distance": 1.845,
       "duration": 298.5
+    },
+    {
+      "id": "obd_fusion_2026_08_13_17_44",
+      "name": "OBD Fusion 2026-08-13 17:44",
+      "date": "2026-08-13",
+      "startTime": "17:44:38",
+      "distance": 6.969,
+      "duration": 790.0
     }
   ]
 }

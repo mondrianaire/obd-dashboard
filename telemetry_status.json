@@ -2,12 +2,12 @@
   "version": "v2.11",
   "buildDate": "2026-09-01",
   "totals": {
-    "driveCount": 70,
-    "totalDist": 1793.66,
-    "totalDur": 117084.0,
-    "totalFuel": 51.622,
+    "driveCount": 72,
+    "totalDist": 1797.0,
+    "totalDur": 118023.0,
+    "totalFuel": 51.824,
     "maxEverSpeed": 100.4,
-    "maxEverRpm": 5658.0,
+    "maxEverRpm": 5859.0,
     "vin": "3VW5T7AU2GM058168",
     "vehicle": "2016 VW Golf GTI (2.0T EA888)"
   },
@@ -571,6 +571,22 @@
       "startTime": "14:00:47",
       "distance": 7.175,
       "duration": 838.0
+    },
+    {
+      "id": "obd_fusion_2026_09_01_12_58",
+      "name": "OBD Fusion 2026-09-01 12:58",
+      "date": "2026-09-01",
+      "startTime": "12:58:30",
+      "distance": 1.538,
+      "duration": 302.6
+    },
+    {
+      "id": "obd_fusion_2026_09_01_13_07",
+      "name": "OBD Fusion 2026-09-01 13:07",
+      "date": "2026-09-01",
+      "startTime": "13:07:21",
+      "distance": 1.803,
+      "duration": 636.0
     }
   ]
 }

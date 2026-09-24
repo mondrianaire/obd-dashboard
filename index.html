@@ -400,6 +400,35 @@ body.perf-mode .sector-table td:first-child{
   text-align:left;color:var(--perf-cyan);font-weight:500;
 }
 body.perf-mode .sector-table tr:hover td{background:#0F0F14!important;}
+
+/* v2.12: Optimal shift-point table */
+.optimal-shift-table{width:100%;border-collapse:collapse;font-size:13px;}
+.optimal-shift-table th{
+  background:#f4f5f7;font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--text-secondary);
+  padding:10px 12px;text-align:right;border-bottom:1px solid #e3e8ef;
+}
+.optimal-shift-table th:first-child{text-align:left;}
+.optimal-shift-table td{
+  padding:9px 12px;text-align:right;border-bottom:1px solid #f0f2f5;
+  font-variant-numeric:tabular-nums;
+}
+.optimal-shift-table td:first-child{text-align:left;font-weight:600;color:var(--text-primary);}
+.optimal-shift-table td.delta-early{color:var(--blue);}
+.optimal-shift-table td.delta-late{color:var(--red);}
+.optimal-shift-table td.delta-zero{color:var(--green);}
+.optimal-shift-table td.dim{color:var(--text-secondary);}
+.optimal-shift-table tr:last-child td{border-bottom:0;}
+body.perf-mode .optimal-shift-table th{
+  background:#0F0F14!important;color:var(--perf-dim)!important;
+  font-family:var(--perf-mono);border-color:var(--perf-border);
+}
+body.perf-mode .optimal-shift-table td{
+  color:var(--perf-text);font-family:var(--perf-mono);border-color:#14161B;
+}
+body.perf-mode .optimal-shift-table td.delta-early{color:var(--perf-cyan);}
+body.perf-mode .optimal-shift-table td.delta-late{color:var(--perf-red);}
+body.perf-mode .optimal-shift-table td.delta-zero{color:var(--perf-green);}
 body.perf-mode .sector-table .bar-cell{position:relative;}
 body.perf-mode .sector-table .bar{
   position:absolute;left:0;top:0;bottom:0;
@@ -760,6 +789,27 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
           <h3>Time in each gear &mdash; all drives</h3>
           <div class="chart-note">Pooled time spent in each gear across every drive that logged RPM. Dominant bar = your habitual cruise gear.</div>
           <div class="canvas-wrap tall"><canvas id="fleetGearHistChart"></canvas></div>
+        </div>
+      </section>
+      <!-- v2.12: Optimal shift points (matched-speed acceleration crossing) -->
+      <section class="chart-row row-1" data-needs="imu">
+        <div class="chart-container" data-needs="imu">
+          <h3>Optimal shift points &mdash; where the next gear starts to pull harder</h3>
+          <div class="chart-note">
+            The optimal upshift isn't the redline &mdash; it's the road speed where the next gear starts producing more forward acceleration than the current one. This chart pools every power-on sample (&gt;30% throttle) across all drives with IMU data, plots measured longitudinal G against road speed for each gear, and marks the speed where adjacent gears cross. That crossing is the theoretical optimal upshift for that pair. <strong>Direct IMU measurement</strong>, so no need for vehicle mass, drag, or dyno &mdash; every unknown cancels when comparing the same speed in two gears.
+          </div>
+          <div class="canvas-wrap tall" style="height:380px;"><canvas id="gearForceChart"></canvas></div>
+          <div class="chart-disabled-msg">Needs IMU data in enough drives (currently disabled &mdash; log a few drives with the IMU channel).</div>
+        </div>
+      </section>
+      <section class="chart-row row-1" data-needs="imu">
+        <div class="chart-container" data-needs="imu">
+          <h3>Where you actually shift vs where the crossings say you should</h3>
+          <div class="chart-note">
+            For each gear pair, the crossing speed becomes an "optimal upshift RPM in the outgoing gear." Compare that to your actual median shift-out RPM across all drives. Positive delta = you're shifting <em>earlier</em> than optimal (leaving power on the table when accelerating). Negative = you're revving past the crossing (which is fine or even preferable in higher regimes).
+          </div>
+          <div class="table-scroll" style="max-height:none;"><table class="optimal-shift-table" id="optimalShiftTable"></table></div>
+          <div class="chart-disabled-msg">Needs IMU + shift-detection data.</div>
         </div>
       </section>
       <section class="chart-row row-2">
@@ -1217,7 +1267,7 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
       </section>
 
 
-  <div class="version-badge" title="Dashboard build">v2.11 · build 2026-09-24 · 86 drives</div>
+  <div class="version-badge" title="Dashboard build">v2.12 · build 2026-09-24 · 86 drives</div>
 
   <footer class="dashboard-footer">
     <span id="footer-meta"></span>
@@ -1564,6 +1614,7 @@ class Dashboard{
     this.buildV20Charts();
     this.buildV21Charts();
     this.buildV211Charts();  // v2.11: master telemetry + sector analysis (perf-mode)
+    this.buildV212Charts();  // v2.12: optimal shift-point analysis (gear-force + crossings)
     this.bindDriveChip();
     this.buildSmallMultiples();
     this.renderDrive();
@@ -1997,6 +2048,7 @@ class Dashboard{
     this.updateV20Charts();
     this.updateV21Charts();
     this.updateV211Charts();  // v2.11: master telemetry + sector analysis (perf-mode)
+    this.updateV212Charts();  // v2.12: optimal shift-point analysis (fleet-wide, drive-agnostic)
     this.updateGearHist();
     this.updateShiftSection();
     this.renderTable();
@@ -3609,6 +3661,218 @@ class Dashboard{
 
     // ----- Sector analysis -----
     this.buildSectorTable(rows);
+  }
+
+  // ==========================================================================
+  // v2.12: Optimal shift-point analysis (§2 cheap method from the handoff doc).
+  // Cancellation argument: at same road speed, a_g(v) = a_{g+1}(v) implies the
+  // optimal upshift is the road speed where measured acceleration in the next
+  // gear overtakes the current one. Every other term (mass, drag, rolling
+  // resistance, driveline efficiency) is identical on both sides and drops
+  // out. We use direct IMU ax so we avoid the doc's speed-quantization gotcha.
+  // ==========================================================================
+  buildV212Charts(){
+    const el = document.getElementById('gearForceChart');
+    if (!el) return;
+    // Six line datasets, one per gear, plus a crossings scatter overlay.
+    const GEAR_COLORS = ['#e63946','#e9a000','#2a9d8f','#1d6fb8','#7c3aed','#0891b2'];
+    const datasets = [];
+    for (let g = 1; g <= 6; g++) {
+      datasets.push({
+        label: 'Gear ' + g,
+        data: [],
+        borderColor: GEAR_COLORS[g-1],
+        backgroundColor: GEAR_COLORS[g-1] + '22',
+        borderWidth: 2, pointRadius: 2, tension: 0.25,
+        parsing: false, yAxisID: 'y',
+      });
+    }
+    // Crossings dataset (scatter of adjacent-gear crossing points)
+    datasets.push({
+      label: 'Crossings (optimal upshift)',
+      data: [], type: 'scatter',
+      borderColor: '#111', backgroundColor: '#FFD700',
+      borderWidth: 2, pointRadius: 8, pointHoverRadius: 10,
+      pointStyle: 'circle', parsing: false, yAxisID: 'y',
+    });
+    this.charts.gearForce = new Chart(el, {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+        plugins: {
+          legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              title: (items) => 'Speed: ' + items[0].parsed.x.toFixed(0) + ' mph',
+              label: (item) => item.dataset.label + ':  ' + item.parsed.y.toFixed(3) + ' G',
+            }
+          }
+        },
+        scales: {
+          x: {
+            type: 'linear', title: { display: true, text: 'Road speed (mph)' },
+            ticks: { stepSize: 10 },
+          },
+          y: {
+            title: { display: true, text: 'Measured longitudinal acceleration (G)' },
+            beginAtZero: false,
+          },
+        }
+      }
+    });
+  }
+
+  // Median helper
+  _median(arr){
+    if (!arr.length) return null;
+    const s = [...arr].sort((a,b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2;
+  }
+
+  updateV212Charts(){
+    if (!this.charts.gearForce) return;
+    // ---- Pool ax across all drives with IMU + gear-inferrable rows ----
+    const BAND = 2;      // 2-mph bins
+    const MIN_THR = 30;  // power-on samples only
+    const MIN_SAMPLES_PER_BIN = 4;
+    const buckets = {1:{}, 2:{}, 3:{}, 4:{}, 5:{}, 6:{}};
+
+    this.drives.forEach(d => {
+      const ch = d.channels || {};
+      if (!ch.imu || !ch.rpm) return;
+      const rows = d.rows || [];
+      for (const r of rows) {
+        if (r.ax == null || r.spd == null || r.rpm == null) continue;
+        if ((r.thr || 0) < MIN_THR) continue;
+        const g = inferGear(r.rpm, r.spd);
+        if (!g) continue;
+        const bin = Math.floor(r.spd / BAND) * BAND;
+        if (!buckets[g][bin]) buckets[g][bin] = [];
+        // ax is stored in m/s²; convert to G by /9.81
+        buckets[g][bin].push(r.ax / 9.81);
+      }
+    });
+
+    // Build per-gear median curves
+    const curves = {};
+    for (let g = 1; g <= 6; g++) {
+      const bins = Object.keys(buckets[g]).map(Number).sort((a, b) => a - b);
+      const curve = [];
+      for (const bin of bins) {
+        const samples = buckets[g][bin];
+        if (samples.length < MIN_SAMPLES_PER_BIN) continue;
+        curve.push({ x: bin, y: this._median(samples), n: samples.length });
+      }
+      curves[g] = curve;
+    }
+
+    // Update line datasets
+    for (let g = 1; g <= 6; g++) {
+      this.charts.gearForce.data.datasets[g-1].data = curves[g].map(p => ({x:p.x, y:p.y}));
+    }
+
+    // ---- Find crossings between adjacent gears ----
+    const crossings = [];  // [{shift, speed, ax}]
+    for (let g = 1; g <= 5; g++) {
+      const cur = curves[g], nxt = curves[g+1];
+      if (!cur.length || !nxt.length) continue;
+      // Map speeds -> ax for O(1) lookup
+      const curMap = new Map(cur.map(p => [p.x, p.y]));
+      const nxtMap = new Map(nxt.map(p => [p.x, p.y]));
+      const commonSpeeds = [...curMap.keys()].filter(s => nxtMap.has(s)).sort((a,b)=>a-b);
+      // Find first speed where nxt >= cur (i.e., next gear starts pulling harder)
+      let prevDelta = null;
+      let crossSpeed = null;
+      for (const s of commonSpeeds) {
+        const delta = nxtMap.get(s) - curMap.get(s);
+        if (prevDelta !== null && prevDelta < 0 && delta >= 0) {
+          // Linear-interp the exact crossing speed
+          const prevS = commonSpeeds[commonSpeeds.indexOf(s) - 1];
+          const t = -prevDelta / (delta - prevDelta);
+          crossSpeed = prevS + t * (s - prevS);
+          break;
+        }
+        prevDelta = delta;
+      }
+      // Fallback: if no sign change, use midpoint of overlap where delta is minimized
+      if (crossSpeed === null && commonSpeeds.length) {
+        const scored = commonSpeeds.map(s => ({s, d: Math.abs(nxtMap.get(s) - curMap.get(s))}));
+        scored.sort((a,b) => a.d - b.d);
+        crossSpeed = scored[0].s;
+      }
+      if (crossSpeed !== null) {
+        const yAt = curMap.get(Math.round(crossSpeed/BAND)*BAND) ??
+                     curMap.get(commonSpeeds[0]) ?? 0;
+        crossings.push({ shift: `${g}→${g+1}`, fromGear: g, speed: crossSpeed, ax: yAt });
+      }
+    }
+
+    // Mark crossings on the chart
+    this.charts.gearForce.data.datasets[6].data =
+      crossings.map(c => ({x: c.speed, y: c.ax}));
+    this.charts.gearForce.update();
+
+    // ---- Build the optimal-shift table ----
+    this.buildOptimalShiftTable(crossings);
+  }
+
+  buildOptimalShiftTable(crossings){
+    const tbl = document.getElementById('optimalShiftTable');
+    if (!tbl) return;
+    if (!crossings.length) {
+      tbl.innerHTML = '<tbody><tr><td>No crossings computable — not enough overlap between adjacent gears.</td></tr></tbody>';
+      return;
+    }
+
+    // Compute your actual median leave-RPM per gear pair from detected shifts
+    const events = detectShifts(this.allRows());
+    const upshifts = events.filter(e => e.toGear === e.fromGear + 1);
+    const byPair = {};
+    for (const e of upshifts) {
+      const key = `${e.fromGear}→${e.toGear}`;
+      (byPair[key] = byPair[key] || []).push(e.fromRpm);
+    }
+
+    let html = '<thead><tr>'
+      + '<th>Shift</th>'
+      + '<th>Optimal upshift speed</th>'
+      + '<th>Optimal upshift RPM (leave)</th>'
+      + '<th>Your median leave RPM</th>'
+      + '<th>Delta</th>'
+      + '<th>n shifts</th>'
+      + '</tr></thead><tbody>';
+
+    for (const c of crossings) {
+      const gearInfo = GEAR_INFO.find(x => x.gear === c.fromGear);
+      // At crossing speed, the current-gear engine RPM is speed * ratio_center
+      const optimalRpm = Math.round(c.speed * gearInfo.center);
+      const actualArr = byPair[c.shift] || [];
+      const actualMed = actualArr.length ? this._median(actualArr) : null;
+      const delta = actualMed != null ? actualMed - optimalRpm : null;
+
+      let deltaCls = 'dim', deltaTxt = '—';
+      if (delta !== null) {
+        deltaTxt = (delta > 0 ? '+' : '') + Math.round(delta) + ' RPM';
+        if (Math.abs(delta) < 200) deltaCls = 'delta-zero';
+        else if (delta < 0) deltaCls = 'delta-early';   // shifting below optimal
+        else deltaCls = 'delta-late';                    // shifting above optimal
+      }
+
+      html += '<tr>'
+        + `<td>${c.shift}</td>`
+        + `<td>${c.speed.toFixed(1)} mph</td>`
+        + `<td>${optimalRpm.toLocaleString()}</td>`
+        + `<td>${actualMed != null ? Math.round(actualMed).toLocaleString() : '<span class="dim">—</span>'}</td>`
+        + `<td class="${deltaCls}">${deltaTxt}</td>`
+        + `<td class="dim">${actualArr.length || 0}</td>`
+        + '</tr>';
+    }
+
+    html += '</tbody>';
+    tbl.innerHTML = html;
   }
 
   buildSectorTable(rows){

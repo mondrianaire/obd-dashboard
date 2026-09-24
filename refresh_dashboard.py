@@ -51,6 +51,24 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.12 - Optimal shift-point analysis (from handoff doc "Shift Points
+#           from OBD"). Applies the §2 cheap method: at the same road speed,
+#           mass/drag/rolling-resistance/driveline all cancel between two
+#           gears, so the optimal upshift is simply the road speed where
+#           measured longitudinal acceleration in gear g+1 overtakes gear g.
+#           We use direct IMU ax (not differentiated speed) so we skip the
+#           doc's biggest gotcha — speed quantization. Two new fleet
+#           Drivetrain tiles:
+#           (1) Gear-force chart — G vs speed, one line per gear, pooled
+#               across all drives with IMU. Crossings between adjacent
+#               gears marked with big yellow dots. Filters to >30% throttle
+#               (power-on samples), 2-mph bins, minimum 4 samples per bin.
+#           (2) Optimal shift table — for each pair 1→2 through 5→6, shows
+#               the crossing speed, the RPM in the outgoing gear at that
+#               speed (the "optimal leave RPM"), the user's actual median
+#               leave RPM across all logged shifts, and the delta. Blue =
+#               shifting early (leaving power on the table), red = shifting
+#               late (past the crossing).
 #   v2.11 - Performance Mode gets FUNCTIONAL F1-telemetry views, not just
 #           a reskin. Adds two perf-mode-only tiles at the top of the
 #           Drive Performance sub-tab:
@@ -135,7 +153,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.11"
+VERSION = "v2.12"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

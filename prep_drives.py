@@ -567,6 +567,226 @@ for d in DRIVES:
         i += 1; d['id'] = f"{base}_{i}"
     seen[d['id']] = True
 
+# ================= v2.13: TRIP STITCHING + PER-DRIVE FILE SPLIT =================
+# Problem: as the dataset grows (now 93+ drives), the main telemetry_data.json
+# crossed GitHub's 100 MB per-file hard limit, so pushes to deploy start failing.
+# Solution: strip per-second row data out of main into drives/<id>.json files
+# that are lazy-loaded by the dashboard; keep only summaries + fleet-aggregate
+# precomputations (gearTime, rpmHist, spdHist, gearForce buckets, downsampled
+# samples, shift events) in main. Dashboard fleet charts read from these
+# precomputed aggregates instead of iterating raw rows.
+#
+# ALSO: a trip-stitching pass groups contiguous drives (same-ish location,
+# close in time) into one "trip" so NC->NYC with gas stops shows as one entry.
+
+from datetime import datetime as _dt_cls
+
+TRIP_TEMPORAL_GAP_S  = 4 * 3600  # within 4 hours = same trip
+TRIP_SPATIAL_GAP_MI  = 1.0       # within 1 mile = same location
+FLEET_SAMPLE_STRIDE  = 10        # every Nth row goes into agg.samples (for scatters)
+
+# Match the dashboard's gear-inference bounds and shift-plausibility logic so
+# precomputed data is consistent with what the dashboard would compute at render.
+_GEAR_BOUNDS = [(13, 6), (16.5, 5), (23, 4), (32.5, 3), (78, 2), (134, 1)]
+_GEAR_CENTERS = {1: 175, 2: 92, 3: 65, 4: 47.5, 5: 40, 6: 32.5}
+_REDLINE_RPM = 6500
+_SHIFT_REDLINE_TOLERANCE = 300
+_SPOOL_RPM = 2200
+_PLATEAU_TOP_LO = 3800
+
+def _infer_gear(rpm, spd):
+    """Mirrors inferGear() in index.html — must return the same gear for the same input."""
+    if rpm is None or spd is None or rpm < 900 or spd < 5: return None
+    ratio = rpm / spd
+    for hi, g in _GEAR_BOUNDS:
+        if ratio < hi: return g
+    return 6
+
+def _ideal_landing_rpm(from_gear, to_gear, from_rpm):
+    cur = _GEAR_CENTERS.get(from_gear); nxt = _GEAR_CENTERS.get(to_gear)
+    if not cur or not nxt or not from_rpm: return None
+    return from_rpm * (nxt / cur)
+
+def _shift_regime(land_rpm):
+    if land_rpm is None: return 'unknown'
+    if land_rpm < _SPOOL_RPM: return 'economy'
+    if land_rpm < _PLATEAU_TOP_LO: return 'sport'
+    return 'performance'
+
+def _is_shift_plausible(ev, from_speed):
+    s = from_speed if (from_speed is not None and from_speed >= 5) else ev.get('speed')
+    if s is None or s < 5: return True
+    f = _GEAR_CENTERS.get(ev['fromGear']); t = _GEAR_CENTERS.get(ev['toGear'])
+    if not f or not t: return True
+    cap = _REDLINE_RPM + _SHIFT_REDLINE_TOLERANCE
+    return (s * f) <= cap and (s * t) <= cap
+
+def _detect_shifts(rows):
+    """Python port of detectShifts() in index.html. Must agree with the JS version."""
+    out = []
+    last = None; last_t = -1e18; last_idx = -1
+    for i, r in enumerate(rows):
+        rpm = r.get('rpm'); spd = r.get('spd'); t = r.get('t')
+        if rpm is None or spd is None or t is None: continue
+        g = _infer_gear(rpm, spd)
+        if g is None: continue
+        if last is not None and g != last and (t - last_t) <= 3:
+            prev = rows[last_idx]
+            from_rpm = prev.get('rpm') if prev else None
+            from_speed = prev.get('spd') if prev else None
+            ideal = _ideal_landing_rpm(last, g, from_rpm)
+            landing = ideal if ideal is not None else rpm
+            ev = {
+                't': t,
+                'fromGear': last, 'toGear': g,
+                'fromRpm': from_rpm, 'toRpm': rpm,
+                'landingRpm': landing,
+                'speed': spd,
+                'throttle': r.get('thr') or 0,
+                'type': 'up' if g > last else 'down',
+                'regime': _shift_regime(landing),
+            }
+            if _is_shift_plausible(ev, from_speed):
+                out.append(ev)
+        last = g; last_t = t; last_idx = i
+    return out
+
+def _parse_drive_dt(d):
+    try:
+        return _dt_cls.fromisoformat(f"{d['date']}T{d['startTime']}")
+    except Exception:
+        return None
+
+def _haversine_mi(lat1, lon1, lat2, lon2):
+    R = 3959
+    dlat = math.radians(lat2 - lat1); dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat/2)**2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2)
+    return 2 * R * math.asin(math.sqrt(a))
+
+def _first_gps(rows):
+    for r in rows:
+        lat, lon = r.get('lat'), r.get('lon')
+        if lat is not None and lon is not None: return (lat, lon)
+    return None
+
+def _last_gps(rows):
+    for r in reversed(rows):
+        lat, lon = r.get('lat'), r.get('lon')
+        if lat is not None and lon is not None: return (lat, lon)
+    return None
+
+def _compute_trips(drives):
+    """Assign tripId to each drive. Drives are already sorted by (date, startTime)."""
+    for d in drives:
+        d['tripId'] = d['id']
+    stitched = 0
+    for i in range(1, len(drives)):
+        prev = drives[i-1]; cur = drives[i]
+        prev_dt = _parse_drive_dt(prev); cur_dt = _parse_drive_dt(cur)
+        if not prev_dt or not cur_dt: continue
+        prev_end = prev_dt.timestamp() + prev['summary']['duration']
+        gap_s = cur_dt.timestamp() - prev_end
+        if gap_s < 0 or gap_s > TRIP_TEMPORAL_GAP_S: continue
+        p = _last_gps(prev.get('rows', [])); c = _first_gps(cur.get('rows', []))
+        if not p or not c: continue
+        if _haversine_mi(*p, *c) > TRIP_SPATIAL_GAP_MI: continue
+        cur['tripId'] = prev['tripId']
+        stitched += 1
+    print(f"  Trip stitching: {stitched} drives joined to previous (<= {TRIP_TEMPORAL_GAP_S}s gap, <= {TRIP_SPATIAL_GAP_MI} mi apart)")
+
+def _build_trips_summary(drives):
+    groups = {}
+    for d in drives:
+        groups.setdefault(d['tripId'], []).append(d)
+    out = []
+    for tid, legs in groups.items():
+        legs.sort(key=lambda x: (x['date'], x['startTime']))
+        first = legs[0]; last = legs[-1]
+        first_dt = _parse_drive_dt(first); last_dt = _parse_drive_dt(last)
+        total_dist = round(sum(l['summary']['distance'] for l in legs), 2)
+        total_dur = round(sum(l['summary']['duration'] for l in legs), 0)
+        elapsed = (last_dt.timestamp() + last['summary']['duration'] - first_dt.timestamp()
+                   if first_dt and last_dt else total_dur)
+        out.append({
+            'id': tid, 'date': first['date'], 'startTime': first['startTime'],
+            'name': first['name'] + (f" + {len(legs)-1} more legs" if len(legs) > 1 else ""),
+            'legCount': len(legs), 'legIds': [l['id'] for l in legs],
+            'distance': total_dist,
+            'drivingDuration': total_dur,
+            'elapsedDuration': round(elapsed, 0),
+            'gapDuration': round(elapsed - total_dur, 0),
+        })
+    out.sort(key=lambda t: (t['date'], t['startTime']))
+    return out
+
+def _compute_drive_aggregates(d):
+    rows = d.get('rows', [])
+    gear_time = [0] * 7
+    rpm_hist = [0] * 13
+    spd_hist = [0] * 11
+    gf_buckets = {}
+    samples = []
+    for i, r in enumerate(rows):
+        rpm = r.get('rpm'); spd = r.get('spd'); thr = r.get('thr'); ax = r.get('ax')
+        g = _infer_gear(rpm, spd)
+        gi = g if g is not None else 0
+        gear_time[gi] += 1
+        if rpm is not None:
+            rpm_hist[min(12, int(rpm // 500))] += 1
+        if spd is not None:
+            spd_hist[min(10, int(spd // 10))] += 1
+        if g is not None and ax is not None and spd is not None and (thr or 0) >= 30:
+            key = f"{g},{int(spd // 2) * 2}"
+            gf_buckets.setdefault(key, []).append(ax / 9.81)
+        if (i % FLEET_SAMPLE_STRIDE) == 0:
+            samples.append({
+                't': r.get('t'), 'rpm': rpm, 'spd': spd, 'thr': thr,
+                'gear': g, 'ax': ax,
+                'afrA': r.get('afrA'), 'afrC': r.get('afrC'),
+                'fuel': r.get('fuel'), 'pwr': r.get('pwr'),
+                'map': r.get('map'), 'boost': r.get('boost'),
+            })
+    gf_out = {}
+    for k, vals in gf_buckets.items():
+        if len(vals) >= 2:
+            vals.sort()
+            gf_out[k] = [round(vals[len(vals)//2], 4), len(vals)]
+    shifts = _detect_shifts(rows)
+    return {
+        'gearTime': gear_time,
+        'rpmHist': rpm_hist,
+        'spdHist': spd_hist,
+        'gearForce': gf_out,
+        'samples': samples,
+        'shifts': shifts,
+    }
+
+# Trip stitching + per-drive aggregates
+_compute_trips(DRIVES)
+TRIPS = _build_trips_summary(DRIVES)
+print(f"  Trips: {len(TRIPS)} unique (from {len(DRIVES)} drive legs)")
+for d in DRIVES:
+    d['agg'] = _compute_drive_aggregates(d)
+
+# Write per-drive row files to drives/<id>.json; strip rows from in-memory DRIVES
+DRIVES_DIR = os.path.join(HERE, 'drives')
+os.makedirs(DRIVES_DIR, exist_ok=True)
+_current_ids = set(d['id'] + '.json' for d in DRIVES)
+for stale in set(os.listdir(DRIVES_DIR)) - _current_ids:
+    try: os.remove(os.path.join(DRIVES_DIR, stale))
+    except OSError: pass
+_total_row_bytes = 0
+for d in DRIVES:
+    rows_path = os.path.join(DRIVES_DIR, d['id'] + '.json')
+    payload = {'id': d['id'], 'rows': d.get('rows', [])}
+    with open(rows_path, 'w') as f:
+        json.dump(payload, f, separators=(',', ':'),
+                  default=lambda x: None if (isinstance(x, float) and math.isnan(x)) else x)
+    _total_row_bytes += os.path.getsize(rows_path)
+    d.pop('rows', None)
+print(f"  Wrote {len(DRIVES)} per-drive row files to drives/ ({_total_row_bytes:,} bytes total)")
+
 hist = [{'id': d['id'], 'name': d['name'], 'date': d['date'], **d['summary']} for d in DRIVES]
 def _maxnonnull(key):
     vals = [h.get(key) for h in hist if h.get(key) is not None]
@@ -592,7 +812,7 @@ totals = {
     'vin':          VIN,
 }
 
-out = {'drives': DRIVES, 'historical': hist, 'totals': totals}
+out = {'drives': DRIVES, 'trips': TRIPS, 'historical': hist, 'totals': totals}
 with open(OUT, 'w') as f:
     json.dump(out, f, separators=(',', ':'),
               default=lambda x: None if (isinstance(x, float) and math.isnan(x)) else x)

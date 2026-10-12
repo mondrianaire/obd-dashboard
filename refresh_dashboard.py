@@ -51,6 +51,31 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.13 - Per-drive file split + trip stitching (unblock deployment).
+#           PROBLEM: telemetry_data.{json,js} crossed GitHub's 100 MB
+#           per-file limit after the two NC->NYC trips (93 drives, 100.5 MB),
+#           so pushes started being rejected. Local was v2.12 at 93 drives;
+#           the live site was stuck at 86 drives from 10-07.
+#           FIX (dashboard structure):
+#           - Per-second rows moved out of main into drives/<id>.json files
+#             (lazy-fetched by the dashboard on drive selection).
+#           - Main JSON now carries summaries + per-drive aggregates
+#             (gearTime, rpmHist, spdHist, gearForce buckets, downsampled
+#             samples at 1/10 density, precomputed shift events). Shrinks
+#             by ~80%, well under 100 MB with huge headroom.
+#           - allRows() reads from agg.samples (every 10th row) which gives
+#             fleet scatters all the resolution they need. New allShifts()
+#             returns precomputed per-drive shifts unioned at JS time.
+#           - Dashboard renderDrive is now async: selectDrive() fetches the
+#             drive's rows before rendering.
+#           FEATURE (trip stitching):
+#           - Adjacent drives within 4 hours temporal gap AND within 1 mi
+#             GPS of each other get stitched into a single trip. NC->NYC
+#             with gas stops surfaces as one trip (with per-leg drilldown).
+#           - Store-and-back-home will also stitch, which the user approved.
+#           - Drive dropdown now shows trips in bold as section headers with
+#             their legs indented beneath. Trip metadata (legCount, elapsed
+#             vs driving duration, gap duration) is in RAW.trips[].
 #   v2.12 - Optimal shift-point analysis (from handoff doc "Shift Points
 #           from OBD"). Applies the §2 cheap method: at the same road speed,
 #           mass/drag/rolling-resistance/driveline all cancel between two
@@ -153,7 +178,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.12"
+VERSION = "v2.13"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
@@ -327,6 +352,22 @@ def verify(meta: dict):
     if n_drives_js != meta["totals"]["driveCount"]:
         sys.exit(f"  ! JS drive count ({n_drives_js}) != in-memory "
                  f"meta drive count ({meta['totals']['driveCount']})")
+
+    # v2.13: verify per-drive row files exist (one per drive, under drives/).
+    drives_dir = os.path.join(HERE, "drives")
+    if not os.path.isdir(drives_dir):
+        sys.exit(f"  ! per-drive directory not found at {drives_dir}")
+    drive_files = {f for f in os.listdir(drives_dir) if f.endswith(".json")}
+    expected = {d["id"] + ".json" for d in parsed.get("drives", [])}
+    missing = expected - drive_files
+    if missing:
+        sys.exit(f"  ! {len(missing)} per-drive row files missing: "
+                 f"{sorted(missing)[:3]}")
+    drives_total = sum(os.path.getsize(os.path.join(drives_dir, f)) for f in drive_files)
+    print(f"  Per-drive files: {len(drive_files)} ({drives_total:,} bytes total)")
+    # The slim main must be well under GitHub's 100 MB per-file push limit.
+    if js_sz > 90 * 1024 * 1024:
+        sys.exit(f"  ! telemetry_data.js is {js_sz:,} bytes (approaching 100 MB git limit)")
 
     # Verify the status manifest is also well-formed and consistent.
     if not os.path.exists(STATUS_PATH):

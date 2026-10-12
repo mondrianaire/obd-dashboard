@@ -90,6 +90,8 @@ def test_schema(raw):
                PASS if len(raw["drives"]) > 0 else FAIL,
                f"{len(raw['drives'])} drives")
         for d in raw["drives"]:
+            # v2.13: "rows" is hydrated from per-drive files in main() so the
+            # rest of the suite can keep using d["rows"] uniformly.
             req = {"id", "name", "date", "channels", "summary", "rows"}
             missing = req - set(d.keys())
             if missing:
@@ -457,6 +459,24 @@ def main():
         return 2
     with open(JSON_PATH, "r", encoding="utf-8") as fh:
         raw = json.load(fh)
+
+    # v2.13: rows now live in per-drive files under drives/<id>.json; hydrate
+    # each drive's "rows" from disk so the existing tests work unchanged.
+    drives_dir = os.path.join(ROOT, "drives")
+    if os.path.isdir(drives_dir):
+        for d in raw.get("drives", []):
+            if "rows" in d and d["rows"]:
+                continue
+            fp = os.path.join(drives_dir, d["id"] + ".json")
+            if os.path.exists(fp):
+                try:
+                    with open(fp, "r", encoding="utf-8") as rfh:
+                        d["rows"] = json.load(rfh).get("rows", [])
+                except Exception as e:
+                    print(f"WARN: failed to hydrate {d['id']}: {e}")
+                    d["rows"] = []
+            else:
+                d["rows"] = []
 
     test_schema(raw)
     test_bounds(raw)

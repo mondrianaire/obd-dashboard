@@ -1267,7 +1267,7 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
       </section>
 
 
-  <div class="version-badge" title="Dashboard build">v2.12 · build 2026-10-12 · 86 drives</div>
+  <div class="version-badge" title="Dashboard build">v2.13 · build 2026-10-12 · 93 drives</div>
 
   <footer class="dashboard-footer">
     <span id="footer-meta"></span>
@@ -1569,9 +1569,11 @@ const METRICS=[
 
 class Dashboard{
   constructor(raw){
+    this.raw=raw;             // v2.13: keep full handle for trips, etc.
     this.drives=raw.drives;
     this.hist=raw.historical;
     this.totals=raw.totals;
+    this.trips=raw.trips||[];
     this.charts={};
     this.metric='distance';
     this.compareMode='bar';
@@ -1583,7 +1585,53 @@ class Dashboard{
   currentDrive(){return this.drives.find(d=>d.id===this.currentId);}
   filtered(){const d=this.currentDrive();
     return d.rows.filter(r=>r.t>=this.winStart&&r.t<=this.winEnd);}
-  allRows(){const out=[];this.drives.forEach(d=>d.rows.forEach(r=>out.push(r)));return out;}
+  // v2.13: rows no longer live in main JSON. For fleet aggregates we use the
+  // downsampled per-drive `agg.samples` list (every 10th row) which is small
+  // and precomputed at prep time. For per-drive views we lazy-load the full
+  // rows via loadDriveRows() on select.
+  allRows(){
+    const out = [];
+    this.drives.forEach(d => {
+      const samples = (d.agg && d.agg.samples) || d.rows || [];
+      samples.forEach(r => out.push(r));
+    });
+    return out;
+  }
+  // Fleet-wide precomputed shifts (unioned across all drives). Replaces the
+  // old `detectShifts(this.allRows())` which no longer has full-resolution data.
+  allShifts(){
+    const out = [];
+    this.drives.forEach(d => {
+      const sh = (d.agg && d.agg.shifts) || [];
+      sh.forEach(ev => out.push(ev));
+    });
+    return out;
+  }
+  // Lazy-load full per-second rows for a drive, cached on the drive object.
+  async loadDriveRows(driveOrId){
+    const d = (typeof driveOrId === 'string')
+      ? this.drives.find(x => x.id === driveOrId) : driveOrId;
+    if (!d) return [];
+    if (d.rows && d.rows.length) return d.rows;
+    if (d._rowsPromise) return d._rowsPromise;
+    d._rowsPromise = (async () => {
+      try {
+        const resp = await fetch('drives/' + encodeURIComponent(d.id) + '.json',
+                                  { cache: 'default' });
+        if (!resp.ok) throw new Error('drive-file-' + resp.status);
+        const payload = await resp.json();
+        d.rows = payload.rows || [];
+        return d.rows;
+      } catch(e) {
+        console.error('[drive-rows] failed to load', d.id, e);
+        d.rows = [];
+        return d.rows;
+      } finally {
+        d._rowsPromise = null;
+      }
+    })();
+    return d._rowsPromise;
+  }
 
   init(){
     document.getElementById('hdr-meta').textContent=
@@ -1617,6 +1665,17 @@ class Dashboard{
     this.buildV212Charts();  // v2.12: optimal shift-point analysis (gear-force + crossings)
     this.bindDriveChip();
     this.buildSmallMultiples();
+    // v2.13: rows are now lazy-loaded. Fetch the initially-selected drive's
+    // rows before the first renderDrive().
+    this._initialRender();
+  }
+
+  // v2.13: async initial-drive load then render.
+  async _initialRender(){
+    try {
+      const d = this.currentDrive();
+      if (d) await this.loadDriveRows(d);
+    } catch(e) { console.error('[init] drive-load error', e); }
     this.renderDrive();
   }
 
@@ -1643,22 +1702,55 @@ class Dashboard{
 
   populateDriveSel(){
     const sel=document.getElementById('drive-sel');
-    sel.innerHTML=this.drives.map(d=>{
-      const dist=d.summary.distance.toFixed(1)+' mi';
-      const dur=fmtDur(d.summary.duration);
-      const tm=d.startTime.slice(0,5);
-      return '<option value="'+d.id+'">'+d.date+' '+tm+'  ·  '+dist+'  ·  '+dur+'  ·  '+d.name+'</option>';
-    }).join('');
-    sel.value=this.currentId;
-    sel.addEventListener('change',()=>this.selectDrive(sel.value));
+    // v2.13: group drives by trip (multi-leg trips show as "Trip 10/08 — 575 mi"
+    // with the first option, then indented leg options for drilling in).
+    const trips = Array.isArray(this.raw.trips) ? this.raw.trips : [];
+    const multiLegById = {};
+    trips.forEach(t => { if (t.legCount > 1) multiLegById[t.id] = t; });
+    const legToTrip = {};
+    this.drives.forEach(d => {
+      if (d.tripId && multiLegById[d.tripId]) legToTrip[d.id] = multiLegById[d.tripId];
+    });
+    const opts = [];
+    const seenTrips = new Set();
+    this.drives.forEach(d => {
+      const trip = legToTrip[d.id];
+      if (trip && !seenTrips.has(trip.id)) {
+        seenTrips.add(trip.id);
+        const tDur = fmtDur(trip.drivingDuration);
+        const tDist = trip.distance.toFixed(1) + ' mi';
+        const tm = trip.startTime.slice(0,5);
+        opts.push(
+          '<option value="' + trip.legIds[0] + '" style="font-weight:600;">'
+          + '— ' + trip.date + ' ' + tm + '  ·  trip (' + trip.legCount + ' legs)  ·  '
+          + tDist + '  ·  ' + tDur + '  —</option>'
+        );
+      }
+      const dist = d.summary.distance.toFixed(1) + ' mi';
+      const dur = fmtDur(d.summary.duration);
+      const tm = d.startTime.slice(0,5);
+      const prefix = trip ? '    ' : '';
+      opts.push(
+        '<option value="' + d.id + '">'
+        + prefix + d.date + ' ' + tm + '  ·  ' + dist + '  ·  ' + dur + '  ·  ' + d.name
+        + '</option>'
+      );
+    });
+    sel.innerHTML = opts.join('');
+    sel.value = this.currentId;
+    sel.addEventListener('change', () => this.selectDrive(sel.value));
   }
 
-  selectDrive(id){
+  async selectDrive(id){
     this.currentId=id;
     const d=this.currentDrive();
     this.winStart=0; this.winEnd=d.summary.duration;
     document.getElementById('drive-sel').value=id;
     this.bindFilterUI();
+    // v2.13: lazy-load rows if not yet in memory
+    if (d && (!d.rows || !d.rows.length)) {
+      try { await this.loadDriveRows(d); } catch(e) { console.error('[select] drive-load error', e); }
+    }
     this.renderDrive();
   }
 
@@ -3571,8 +3663,8 @@ class Dashboard{
     if (!d.channels.rpm) return;
     const events = detectShifts(this.filtered());
     this.updateEconShifts(events, this.charts.econRegime, this.charts.econPair, 'econ-kpi-row', 'drive');
-    // Fleet uses all rows across all drives
-    const all = detectShifts(this.allRows());
+    // v2.13: fleet uses precomputed per-drive shift events (unioned at JS time)
+    const all = this.allShifts();
     this.updateEconShifts(all, this.charts.fleetEconRegime, this.charts.fleetEconPair, 'fleet-econ-kpi-row', 'fleet');
   }
 
@@ -3827,8 +3919,8 @@ class Dashboard{
       return;
     }
 
-    // Compute your actual median leave-RPM per gear pair from detected shifts
-    const events = detectShifts(this.allRows());
+    // v2.13: use precomputed shift events for the fleet-wide comparison
+    const events = this.allShifts();
     const upshifts = events.filter(e => e.toGear === e.fromGear + 1);
     const byPair = {};
     for (const e of upshifts) {
@@ -4092,8 +4184,9 @@ class Dashboard{
 
   rmActualShifts(card){
     const fleet = card.id === 'revmatch-fleet';
-    const rows = fleet ? this.allRows() : this.filtered();
-    return detectShifts(rows).filter(s => s.type === 'up');
+    // v2.13: fleet uses precomputed shifts; drive uses live detection on filtered rows
+    const events = fleet ? this.allShifts() : detectShifts(this.filtered());
+    return events.filter(s => s.type === 'up');
   }
 
   drawRevMatch(card){

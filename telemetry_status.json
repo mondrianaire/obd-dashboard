@@ -1,11 +1,11 @@
 {
-  "version": "v2.12",
+  "version": "v2.13",
   "buildDate": "2026-10-12",
   "totals": {
-    "driveCount": 86,
-    "totalDist": 2096.86,
-    "totalDur": 138827.0,
-    "totalFuel": 60.812,
+    "driveCount": 93,
+    "totalDist": 3136.47,
+    "totalDur": 196734.0,
+    "totalFuel": 90.788,
     "maxEverSpeed": 100.4,
     "maxEverRpm": 5859.0,
     "vin": "3VW5T7AU2GM058168",
@@ -699,6 +699,62 @@
       "startTime": "17:58:31",
       "distance": 6.432,
       "duration": 699.0
+    },
+    {
+      "id": "obd_fusion_2026_10_07_23_49",
+      "name": "OBD Fusion 2026-10-07 23:49",
+      "date": "2026-10-07",
+      "startTime": "23:49:37",
+      "distance": 192.051,
+      "duration": 9201.0
+    },
+    {
+      "id": "obd_fusion_2026_10_08_02_33",
+      "name": "OBD Fusion 2026-10-08 02:33",
+      "date": "2026-10-08",
+      "startTime": "02:33:05",
+      "distance": 214.888,
+      "duration": 10882.0
+    },
+    {
+      "id": "obd_fusion_2026_10_08_05_38",
+      "name": "OBD Fusion 2026-10-08 05:38",
+      "date": "2026-10-08",
+      "startTime": "05:38:11",
+      "distance": 4.438,
+      "duration": 355.9
+    },
+    {
+      "id": "obd_fusion_2026_10_08_05_44",
+      "name": "OBD Fusion 2026-10-08 05:44",
+      "date": "2026-10-08",
+      "startTime": "05:44:16",
+      "distance": 141.239,
+      "duration": 12404.0
+    },
+    {
+      "id": "obd_fusion_2026_10_12_00_44",
+      "name": "OBD Fusion 2026-10-12 00:44",
+      "date": "2026-10-12",
+      "startTime": "00:44:34",
+      "distance": 122.838,
+      "duration": 6019.0
+    },
+    {
+      "id": "obd_fusion_2026_10_12_02_44",
+      "name": "OBD Fusion 2026-10-12 02:44",
+      "date": "2026-10-12",
+      "startTime": "02:44:50",
+      "distance": 362.186,
+      "duration": 18688.0
+    },
+    {
+      "id": "obd_fusion_2026_10_12_08_28",
+      "name": "OBD Fusion 2026-10-12 08:28",
+      "date": "2026-10-12",
+      "startTime": "08:28:12",
+      "distance": 1.963,
+      "duration": 356.6
     }
   ]
 }

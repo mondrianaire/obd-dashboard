@@ -1584,16 +1584,26 @@ class Dashboard{
   }
   currentDrive(){return this.drives.find(d=>d.id===this.currentId);}
   filtered(){const d=this.currentDrive();
-    return d.rows.filter(r=>r.t>=this.winStart&&r.t<=this.winEnd);}
+    return (d.rows||[]).filter(r=>r.t>=this.winStart&&r.t<=this.winEnd);}
   // v2.13: rows no longer live in main JSON. For fleet aggregates we use the
   // downsampled per-drive `agg.samples` list (every 10th row) which is small
   // and precomputed at prep time. For per-drive views we lazy-load the full
   // rows via loadDriveRows() on select.
   allRows(){
     const out = [];
+    // Each agg.samples entry represents ~10s of 1 Hz source (FLEET_SAMPLE_STRIDE
+    // in prep). Inject `dur:10` so time-weighted fleet histograms (speed hist,
+    // RPM hist, gear hist, fuel band) still accumulate correctly.
+    const SAMPLE_DUR = 10;
     this.drives.forEach(d => {
-      const samples = (d.agg && d.agg.samples) || d.rows || [];
-      samples.forEach(r => out.push(r));
+      if (d.agg && d.agg.samples) {
+        d.agg.samples.forEach(r => {
+          if (r.dur == null) r.dur = SAMPLE_DUR;
+          out.push(r);
+        });
+      } else if (d.rows) {
+        d.rows.forEach(r => out.push(r));
+      }
     });
     return out;
   }
@@ -2080,7 +2090,7 @@ class Dashboard{
     document.getElementById('overview-when').textContent=
       d.date+' · '+d.startTime+'  ·  '+d.summary.distance.toFixed(1)+' mi  ·  '+fmtDur(d.summary.duration);
     const ch=d.channels;
-    const hasGps=d.rows.some(r=>r.lat!=null);
+    const hasGps=(d.rows||[]).some(r=>r.lat!=null);
     const hasDiag=ch.coolant||ch.iat||ch.volt;
     const hasAfr=ch.afr||ch.map;
     document.querySelectorAll('[data-needs]').forEach(el=>{
@@ -2191,7 +2201,7 @@ class Dashboard{
       items.push({lbl:'Peak power',val:s.peakPwr.toFixed(0)+' hp',note,cls:''});
     }
     {
-      const f=d.rows;
+      const f=d.rows||[];
       const totalDur=f.reduce((a,r)=>a+(r.dur||0),0);
       const wotDur=f.filter(r=>r.thr>=50).reduce((a,r)=>a+(r.dur||0),0);
       if(totalDur>0){
@@ -2204,7 +2214,7 @@ class Dashboard{
       }
     }
     {
-      const f=d.rows;
+      const f=d.rows||[];
       const boosts=f.map(r=>r.boost).filter(x=>x!=null);
       if(boosts.length){
         const peak=Math.max(...boosts);
@@ -2227,7 +2237,7 @@ class Dashboard{
   }
 
   computeRouteBounds(d){
-    const pts=d.rows.filter(r=>r.lat!=null);
+    const pts=(d.rows||[]).filter(r=>r.lat!=null);
     if(pts.length===0)return null;
     let loLa=Infinity,hiLa=-Infinity,loLo=Infinity,hiLo=-Infinity;
     pts.forEach(p=>{if(p.lat<loLa)loLa=p.lat;if(p.lat>hiLa)hiLa=p.lat;
@@ -2543,7 +2553,7 @@ class Dashboard{
     c.options.scales.y.min=this.routeBounds.latMin;
     c.options.scales.y.max=this.routeBounds.latMax;
     const data=[],rad=[],col=[];
-    d.rows.forEach(r=>{
+    (d.rows||[]).forEach(r=>{
       if(r.lat==null)return;
       const inWin=r.t>=this.winStart&&r.t<=this.winEnd;
       data.push({x:r.lon,y:r.lat,t:r.t,spd:r.spd});
@@ -2834,10 +2844,8 @@ class Dashboard{
   }
 
   updateFleetShiftCharts(){
-    const allEvents=[];
-    this.drives.forEach(d=>{
-      if(d.channels.rpm)allEvents.push(...detectShifts(d.rows).filter(e=>e.type==='up'));
-    });
+    // v2.13: use precomputed per-drive shifts (fleet-wide union)
+    const allEvents = this.allShifts().filter(e => e.type === 'up');
     // regime donut
     if(this.charts.fleetShiftRegime){
       const r={'economy':0,'sport':0,'performance':0};
@@ -3832,7 +3840,22 @@ class Dashboard{
     const MIN_SAMPLES_PER_BIN = 4;
     const buckets = {1:{}, 2:{}, 3:{}, 4:{}, 5:{}, 6:{}};
 
+    // v2.13: use precomputed per-drive gearForce buckets instead of iterating
+    // raw rows (which are now lazy-loaded and not available fleet-wide).
     this.drives.forEach(d => {
+      const gf = (d.agg && d.agg.gearForce) || {};
+      Object.keys(gf).forEach(key => {
+        const [g, bin] = key.split(',').map(Number);
+        if (!buckets[g]) return;
+        if (!buckets[g][bin]) buckets[g][bin] = [];
+        const [median, n] = gf[key];
+        // Preserve per-drive median with its sample count as weight
+        for (let i = 0; i < Math.min(n, 50); i++) buckets[g][bin].push(median);
+      });
+    });
+    // (The loop below still runs for any drive whose rows ARE loaded, but we
+    // use the precomputed buckets as the primary source. Keep the IIFE no-op.)
+    if (false) this.drives.forEach(d => {
       const ch = d.channels || {};
       if (!ch.imu || !ch.rpm) return;
       const rows = d.rows || [];

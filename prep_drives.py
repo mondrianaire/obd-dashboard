@@ -640,7 +640,12 @@ FLEET_SAMPLE_STRIDE  = 10        # every Nth row goes into agg.samples (for scat
 
 # Match the dashboard's gear-inference bounds and shift-plausibility logic so
 # precomputed data is consistent with what the dashboard would compute at render.
-_GEAR_BOUNDS = [(13, 6), (16.5, 5), (23, 4), (32.5, 3), (78, 2), (134, 1)]
+# v2.13.2 fix: these MUST match GEAR_BOUNDS in index.html exactly, or
+# precomputed aggregates (gearTime, gearForce buckets, agg.samples[].gear)
+# are wrong. The v2.13 initial port had the inner-gear thresholds wrong by
+# a factor of ~2.7x (used 13/16.5/23/32.5/78 instead of 36/44/56/78/134).
+# Verified against index.html line 1445 and tests/test_dataviews.py.
+_GEAR_BOUNDS = [(36, 6), (44, 5), (56, 4), (78, 3), (134, 2), (float("inf"), 1)]
 _GEAR_CENTERS = {1: 175, 2: 92, 3: 65, 4: 47.5, 5: 40, 6: 32.5}
 _REDLINE_RPM = 6500
 _SHIFT_REDLINE_TOLERANCE = 300

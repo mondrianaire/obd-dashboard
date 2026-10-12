@@ -76,6 +76,21 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #           gap_hours * 85 mi from the next. Adds --no-rotate flag.
 #   v2.13.1 - Fix blank charts: remaining d.rows readers use lazy-loaded rows
 #           or precomputed per-drive aggregates.
+#   v2.13.2 - CRITICAL bug fix: prep_drives.py's _GEAR_BOUNDS were wrong.
+#             The v2.13 initial port had [(13,6),(16.5,5),(23,4),(32.5,3),
+#             (78,2),(134,1)] instead of the dashboard's actual
+#             [(36,6),(44,5),(56,4),(78,3),(134,2),(inf,1)] — off by
+#             ~2.7x on the inner gears. This made EVERY per-drive aggregate
+#             (gearTime, gearForce buckets, agg.samples[].gear, precomputed
+#             shift events) misclassify gears since v2.13 shipped.
+#             Impact: fleet gear-time histogram was skewed, v2.12 optimal-
+#             shift crossings were partly wrong (the "4->5 at 1,356 RPM"
+#             anomaly was the bug compounded with mild driving), per-drive
+#             shift events had wrong fromGear/toGear tags. Dashboard-side
+#             inferGear() was always correct — only the Python-precomputed
+#             data was off.
+#             Fix: one-line bounds correction. Must re-prep to regenerate
+#             all 93 per-drive aggregate blobs.
 #   v2.13 - Per-drive file split + trip stitching (unblock deployment).
 #           PROBLEM: telemetry_data.{json,js} crossed GitHub's 100 MB
 #           per-file limit after the two NC->NYC trips (93 drives, 100.5 MB),

@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Drive Telemetry Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
+<!-- v2.14: Leaflet for the zoomable/pannable GPS route map -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <style>
 :root{
   --bg-primary:#f4f5f7; --bg-card:#ffffff; --bg-header:#1a1a2e;
@@ -57,6 +60,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .canvas-wrap{position:relative;height:260px;}
 .canvas-wrap.tall{height:330px;}
 .canvas-wrap.hero-route{height:360px;}
+/* v2.14: Leaflet route map. isolation keeps Leaflet's z-indexed panes
+   (up to 1000) from painting over the sticky header / mobile drive sheet. */
+.route-map{position:absolute;inset:0;border-radius:6px;isolation:isolate;z-index:0;
+  background:#e9ecef;}
+.route-map .leaflet-control-fit{background:#fff;border:none;cursor:pointer;
+  font:600 11px/1 inherit;padding:7px 9px;}
+.route-map .route-hover{font-size:11px;line-height:1.35;}
+body.perf-mode .route-map{background:#000;border-radius:0;}
+body.perf-mode .route-map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.8) contrast(.9) saturate(.3);}
+body.perf-mode .route-map .leaflet-bar a,
+body.perf-mode .route-map .leaflet-control-fit{background:#0b0b0b;color:var(--perf-cyan,#00e5ff);
+  border-color:#222;font-family:ui-monospace,Menlo,Consolas,monospace;text-transform:uppercase;}
+body.perf-mode .route-map .leaflet-control-attribution{background:rgba(0,0,0,.6);color:#777;}
+body.perf-mode .route-map .leaflet-control-attribution a{color:#999;}
 .compare-controls{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
 .compare-controls label{font-size:12px;color:var(--text-secondary);}
 .compare-controls select{padding:5px 10px;border-radius:6px;border:1px solid #dee2e6;
@@ -574,6 +591,11 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
   .drive-card .name{font-size:14px;font-weight:700;color:var(--text-primary);
     margin:3px 0;}
   .drive-card .stats{font-size:13px;color:var(--text-secondary);}
+  /* v2.14: trip / leg group cards + indented members */
+  .drive-card.group{border-left-color:var(--blue);background:#f3f7fc;}
+  .drive-card.group .name{font-size:15px;}
+  .drive-card.lvl-1{margin-left:14px;width:calc(100% - 14px);}
+  .drive-card.lvl-2{margin-left:28px;width:calc(100% - 28px);}
 }
 
 /* --- Sub-tab nav inside each view (v1.5) -------- */
@@ -906,8 +928,8 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
             <h3 id="overview-title">Trip route</h3>
             <span class="when" id="overview-when"></span>
           </div>
-          <div class="chart-note">Selected window coloured by speed (green = slow, red = fast); the rest is greyed.</div>
-          <div class="canvas-wrap hero-route"><canvas id="routeChart"></canvas></div>
+          <div class="chart-note">Selected window coloured by speed (green = slow, red = fast); the rest is greyed. Drag to pan, scroll or pinch to zoom (click the map first to enable wheel zoom). White dots mark stops between drives.</div>
+          <div class="canvas-wrap hero-route"><div id="routeMap" class="route-map"></div></div>
           <div class="chart-disabled-msg">No GPS data in this drive.</div>
         </div>
         <div class="chart-container">
@@ -1267,7 +1289,7 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
       </section>
 
 
-  <div class="version-badge" title="Dashboard build">v2.13.2 · build 2026-10-12 · 93 drives</div>
+  <div class="version-badge" title="Dashboard build">v2.14 · build 2026-10-12 · 93 drives</div>
 
   <footer class="dashboard-footer">
     <span id="footer-meta"></span>
@@ -1369,6 +1391,43 @@ document.addEventListener('DOMContentLoaded', function(){
 
 function fmtTime(sec){const m=Math.floor(sec/60),s=Math.round(sec%60);return m+':'+String(s).padStart(2,'0');}
 function fmtDur(sec){if(sec>=3600)return (sec/3600).toFixed(1)+' hr';return fmtTime(sec);}
+// v2.14: min/max decimation for long time-series line charts. A whole trip
+// is 50k+ rows; plotting every point per series froze the page. Each bucket
+// keeps its lowest and highest y (in x order), so peaks survive. Datasets
+// with per-point style arrays are skipped (decimating would misalign them).
+const DECIMATE_MAX_POINTS = 2000;
+function minMaxDecimate(d, max){
+  const buckets = Math.floor(max / 2), n = d.length, size = n / buckets, out = [];
+  for (let b = 0; b < buckets; b++) {
+    const s = Math.floor(b * size), e = Math.min(n, Math.floor((b + 1) * size));
+    let lo = null, hi = null;
+    for (let i = s; i < e; i++) {
+      const p = d[i];
+      if (p == null || p.y == null) continue;
+      if (!lo || p.y < lo.y) lo = p;
+      if (!hi || p.y > hi.y) hi = p;
+    }
+    if (!lo) { if (e > s) out.push({x: d[s].x, y: null}); continue; }
+    if (lo === hi) out.push(lo); else if (lo.x < hi.x) out.push(lo, hi); else out.push(hi, lo);
+  }
+  return out;
+}
+Chart.register({
+  id: 'autoDecimate',
+  beforeUpdate(chart){
+    const xs = chart.options.scales && chart.options.scales.x;
+    if (!xs || xs.type !== 'linear') return;
+    chart.data.datasets.forEach(ds => {
+      if ((ds.type || chart.config.type) !== 'line') return;
+      const d = ds.data;
+      if (!Array.isArray(d) || d.length <= DECIMATE_MAX_POINTS) return;
+      if (!d[0] || typeof d[0] !== 'object' || !('x' in d[0])) return;
+      if (['pointRadius','pointBackgroundColor','backgroundColor','borderColor'].some(k => Array.isArray(ds[k]))) return;
+      ds.data = minMaxDecimate(d, DECIMATE_MAX_POINTS);
+    });
+  }
+});
+
 function speedColor(v,max){const t=Math.max(0,Math.min(1,v/max));const h=130*(1-t);return 'hsl('+h+',72%,44%)';}
 function fuelColor(v){const t=Math.max(0,Math.min(1,v/3.5));const h=210-198*t;return 'hsl('+h+',78%,48%)';}
 function thrColor(v){const t=Math.max(0,Math.min(1,(v||0)/100));const h=130-130*t;return 'hsl('+h+',75%,48%)';}
@@ -1574,6 +1633,9 @@ class Dashboard{
     this.hist=raw.historical;
     this.totals=raw.totals;
     this.trips=raw.trips||[];
+    this.legs=raw.legs||[];   // v2.14: drive -> leg -> trip hierarchy
+    this.driveById={}; this.drives.forEach(d=>{this.driveById[d.id]=d;});
+    this.composites={};       // 'trip:<id>' / 'leg:<id>' -> synthesized drive
     this.charts={};
     this.metric='distance';
     this.compareMode='bar';
@@ -1582,7 +1644,78 @@ class Dashboard{
     this.winStart=0; this.winEnd=this.currentDrive().summary.duration;
     this.init();
   }
-  currentDrive(){return this.drives.find(d=>d.id===this.currentId);}
+  currentDrive(){return this.composites[this.currentId]||this.driveById[this.currentId];}
+  // True when drive `id` is (part of) the current selection.
+  isSelected(id){
+    const c=this.composites[this.currentId];
+    return c ? c.segments.some(s=>s.id===id) : id===this.currentId;
+  }
+  // v2.14: a trip or leg rendered as one drive. Rows from each member drive
+  // are concatenated on a continuous time axis (driving time only; real stop
+  // durations are kept in segments[].gapBefore) so every single-drive chart,
+  // KPI, table and the route map work unchanged.
+  async buildComposite(key){
+    if(this.composites[key]) return this.composites[key];
+    const [kind,id]=[key.slice(0,key.indexOf(':')),key.slice(key.indexOf(':')+1)];
+    const group=(kind==='trip'?this.trips:this.legs).find(g=>g.id===id);
+    if(!group) return null;
+    const ds=group.driveIds.map(i=>this.driveById[i]).filter(Boolean);
+    await Promise.all(ds.map(d=>this.loadDriveRows(d)));
+    // 30 s of dead air between drives: keeps shift detection (<=3 s) and
+    // any delta-based math from bridging two separate logs.
+    const PAD=30;
+    const rows=[],segments=[];
+    let off=0, prevEnd=null;
+    ds.forEach((d,i)=>{
+      const rs=d.rows||[];
+      const span=Math.max(rs.length?rs[rs.length-1].t:0, d.summary.duration||0);
+      const startTs=Date.parse(d.date+'T'+d.startTime);
+      segments.push({id:d.id,name:d.name,date:d.date,startTime:d.startTime,
+        t0:off,t1:off+span,label:'Drive '+(i+1)+' of '+ds.length+' · '+d.date+' '+d.startTime.slice(0,5),
+        gapBefore:(prevEnd!=null&&!isNaN(startTs))?Math.max(0,(startTs-prevEnd)/1000):null});
+      prevEnd=isNaN(startTs)?null:startTs+(d.summary.duration||0)*1000;
+      for(const r of rs){const o=Object.assign({},r);o.t=Math.round((r.t+off)*10)/10;o._seg=i;rows.push(o);}
+      off+=span+PAD;
+    });
+    const S=ds.map(d=>d.summary);
+    const sum=k=>S.reduce((a,x)=>a+(x[k]||0),0);
+    const mx=k=>{const v=S.map(x=>x[k]).filter(x=>x!=null);return v.length?Math.max(...v):null;};
+    const wavg=k=>{let w=0,a=0;S.forEach(x=>{if(x[k]!=null){a+=x[k]*x.duration;w+=x.duration;}});return w?a/w:null;};
+    const peakMoment=k=>{let best=null;ds.forEach((d,i)=>{const m=d.summary[k];
+      if(m&&(best==null||m.value>best.value))best=Object.assign({},m,{t:m.t+segments[i].t0});});return best;};
+    const fuelDs=ds.filter(d=>d.channels.fuel&&d.summary.fuel!=null);
+    const fuel=fuelDs.length?fuelDs.reduce((a,d)=>a+d.summary.fuel,0):null;
+    const fuelDist=fuelDs.reduce((a,d)=>a+d.summary.distance,0);
+    const dist=sum('distance');
+    const moveH=S.reduce((a,x)=>a+(x.avgMoveSpeed>0?x.distance/x.avgMoveSpeed:0),0);
+    const ke=S.some(x=>x.knockEvents!=null)?sum('knockEvents'):null;
+    const summary={
+      duration:rows.length?rows[rows.length-1].t:Math.max(0,off-PAD),
+      drivingDuration:group.drivingDuration, elapsedDuration:group.elapsedDuration,
+      distance:dist, maxSpeed:mx('maxSpeed')||0,
+      avgMoveSpeed:moveH>0?dist/moveH:0,
+      fuel, mpg:(fuel&&fuel>0)?fuelDist/fuel:null,
+      maxRpm:mx('maxRpm'), peakPwr:mx('peakPwr'), maxThr:mx('maxThr')||0,
+      samples:sum('samples'),
+      peakTq:mx('peakTq'), peakBoost:mx('peakBoost'), maxCoolant:mx('maxCoolant'),
+      peakTqMoment:peakMoment('peakTqMoment'), peakPwrMoment:peakMoment('peakPwrMoment'),
+      peakBoostMoment:peakMoment('peakBoostMoment'),
+      knockEvents:ke, knockEventRate:wavg('knockEventRate'),
+      avgLTFT:wavg('avgLTFT'), avgWarmCoolant:wavg('avgWarmCoolant'),
+    };
+    const channels={};
+    ds.forEach(d=>Object.keys(d.channels||{}).forEach(k=>{channels[k]=channels[k]||!!d.channels[k];}));
+    const first=ds[0];
+    const range=group.endDate&&group.endDate!==group.date?group.date+' → '+group.endDate:group.date;
+    const name=kind==='trip'
+      ? 'Trip · '+range+' · '+group.legCount+' legs, '+ds.length+' drives'
+      : 'Leg · '+range+' · '+ds.length+' drives';
+    const c={id:key,composite:kind,name,date:first.date,startTime:first.startTime,
+      source:ds.length+' drives ('+[...new Set(ds.map(d=>d.source))].length+' source files)',
+      channels,summary,rows,segments,group};
+    this.composites[key]=c;
+    return c;
+  }
   filtered(){const d=this.currentDrive();
     return (d.rows||[]).filter(r=>r.t>=this.winStart&&r.t<=this.winEnd);}
   // v2.13: rows no longer live in main JSON. For fleet aggregates we use the
@@ -1710,55 +1843,66 @@ class Dashboard{
     sel.addEventListener('change',()=>{this.metric=sel.value;this.renderCompareChart();});
   }
 
+  // v2.14: hierarchical selector. A trip (there-and-back, >1 leg) and a leg
+  // (>1 drive stitched across stops) are selectable as a whole, with their
+  // members indented underneath. Single-drive trips/legs collapse to the drive.
+  selectorEntries(){
+    const out=[];
+    const legById={}; this.legs.forEach(l=>{legById[l.id]=l;});
+    const fmtGroup=(g)=>g.distance.toFixed(1)+' mi  ·  '+fmtDur(g.drivingDuration)+' driving';
+    const driveEntry=(d,lvl)=>({value:d.id,lvl,kind:'drive',d,
+      label:d.date+' '+d.startTime.slice(0,5)+'  ·  '+d.summary.distance.toFixed(1)+' mi  ·  '+
+            fmtDur(d.summary.duration)+'  ·  '+d.name});
+    const legEntries=(l,lvl,idx)=>{
+      const ds=l.driveIds.map(i=>this.driveById[i]).filter(Boolean);
+      if(ds.length<2) return ds.map(d=>driveEntry(d,lvl));
+      return [{value:'leg:'+l.id,lvl,kind:'leg',g:l,
+        label:(idx!=null?'Leg '+idx+'  ·  ':'Leg  ·  ')+l.date+' '+l.startTime.slice(0,5)+'  ·  '+
+              ds.length+' drives  ·  '+fmtGroup(l)}]
+        .concat(ds.map(d=>driveEntry(d,lvl+1)));
+    };
+    const trips=this.trips.length?this.trips
+      :this.drives.map(d=>({id:d.id,legIds:[d.id],legCount:1}));   // pre-v2.14 data
+    trips.forEach(t=>{
+      const legs=(t.legIds||[]).map(i=>legById[i]).filter(Boolean);
+      if(!legs.length){(t.driveIds||[t.id]).forEach(i=>this.driveById[i]&&out.push(driveEntry(this.driveById[i],0)));return;}
+      if(legs.length<2){out.push(...legEntries(legs[0],0,null));return;}
+      const range=t.endDate&&t.endDate!==t.date?t.date+' → '+t.endDate:t.date+' '+t.startTime.slice(0,5);
+      out.push({value:'trip:'+t.id,lvl:0,kind:'trip',g:t,
+        label:'TRIP  ·  '+range+'  ·  '+legs.length+' legs, '+t.driveCount+' drives  ·  '+fmtGroup(t)});
+      legs.forEach((l,i)=>out.push(...legEntries(l,1,i+1)));
+    });
+    return out;
+  }
+
   populateDriveSel(){
     const sel=document.getElementById('drive-sel');
-    // v2.13: group drives by trip (multi-leg trips show as "Trip 10/08 — 575 mi"
-    // with the first option, then indented leg options for drilling in).
-    const trips = Array.isArray(this.raw.trips) ? this.raw.trips : [];
-    const multiLegById = {};
-    trips.forEach(t => { if (t.legCount > 1) multiLegById[t.id] = t; });
-    const legToTrip = {};
-    this.drives.forEach(d => {
-      if (d.tripId && multiLegById[d.tripId]) legToTrip[d.id] = multiLegById[d.tripId];
-    });
-    const opts = [];
-    const seenTrips = new Set();
-    this.drives.forEach(d => {
-      const trip = legToTrip[d.id];
-      if (trip && !seenTrips.has(trip.id)) {
-        seenTrips.add(trip.id);
-        const tDur = fmtDur(trip.drivingDuration);
-        const tDist = trip.distance.toFixed(1) + ' mi';
-        const tm = trip.startTime.slice(0,5);
-        opts.push(
-          '<option value="' + trip.legIds[0] + '" style="font-weight:600;">'
-          + '— ' + trip.date + ' ' + tm + '  ·  trip (' + trip.legCount + ' legs)  ·  '
-          + tDist + '  ·  ' + tDur + '  —</option>'
-        );
-      }
-      const dist = d.summary.distance.toFixed(1) + ' mi';
-      const dur = fmtDur(d.summary.duration);
-      const tm = d.startTime.slice(0,5);
-      const prefix = trip ? '    ' : '';
-      opts.push(
-        '<option value="' + d.id + '">'
-        + prefix + d.date + ' ' + tm + '  ·  ' + dist + '  ·  ' + dur + '  ·  ' + d.name
-        + '</option>'
-      );
-    });
-    sel.innerHTML = opts.join('');
-    sel.value = this.currentId;
-    sel.addEventListener('change', () => this.selectDrive(sel.value));
+    const NB=' ';   // <option> collapses ordinary spaces
+    sel.innerHTML=this.selectorEntries().map(e=>{
+      const pad=NB.repeat(e.lvl*4)+(e.kind==='trip'?'▼ ':e.kind==='leg'?'▸ ':'');
+      const style=e.kind==='trip'?' style="font-weight:700;"':e.kind==='leg'?' style="font-weight:600;"':'';
+      return '<option value="'+e.value+'"'+style+'>'+pad+e.label+'</option>';
+    }).join('');
+    sel.value=this.currentId;
+    sel.addEventListener('change',()=>this.selectDrive(sel.value));
   }
 
   async selectDrive(id){
+    const sel=document.getElementById('drive-sel');
+    if(id.startsWith('trip:')||id.startsWith('leg:')){
+      sel.disabled=true;   // multi-file fetch can take a few seconds on big trips
+      try{ await this.buildComposite(id); }
+      catch(e){ console.error('[select] composite build error',e); }
+      finally{ sel.disabled=false; }
+      if(!this.composites[id]) return;
+    }
     this.currentId=id;
     const d=this.currentDrive();
     this.winStart=0; this.winEnd=d.summary.duration;
-    document.getElementById('drive-sel').value=id;
+    sel.value=id;
     this.bindFilterUI();
     // v2.13: lazy-load rows if not yet in memory
-    if (d && (!d.rows || !d.rows.length)) {
+    if (d && !d.composite && (!d.rows || !d.rows.length)) {
       try { await this.loadDriveRows(d); } catch(e) { console.error('[select] drive-load error', e); }
     }
     this.renderDrive();
@@ -1768,7 +1912,7 @@ class Dashboard{
     const cols=['Date · Time','Drive','Dist (mi)','Dur','Top (mph)','Max RPM','Peak hp','Fuel (gal)','MPG'];
     let h='<thead><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>';
     this.hist.forEach(d=>{
-      const sel=d.id===this.currentId?' class="sel"':'';
+      const sel=this.isSelected(d.id)?' class="sel"':'';
       const dr=this.drives.find(x=>x.id===d.id);
       const dt=dr?dr.date+' '+dr.startTime.slice(0,5):d.date;
       h+='<tr'+sel+' data-id="'+d.id+'">'+
@@ -1841,7 +1985,7 @@ class Dashboard{
     const m=METRICS.find(x=>x.k===this.metric);
     const labels=this.hist.map(d=>d.date);
     const vals=this.hist.map(d=>d[this.metric]==null?0:d[this.metric]);
-    const cols=this.hist.map(d=>d.id===this.currentId?COL.amber:COL.blue);
+    const cols=this.hist.map(d=>this.isSelected(d.id)?COL.amber:COL.blue);
     const cb=this.charts.compare;
     cb.data.labels=labels;
     cb.data.datasets[0].data=vals;
@@ -2085,10 +2229,12 @@ class Dashboard{
     const d=this.currentDrive();
     document.getElementById('drive-meta').textContent=
       'Logged '+d.date+' '+d.startTime+'  ·  '+d.summary.samples.toLocaleString()+' raw samples  ·  '+
-      fmtDur(d.summary.duration)+'  ·  source: '+d.source;
+      fmtDur(d.summary.duration)+'  ·  source: '+d.source+
+      (d.composite?'  ·  '+fmtDur(d.summary.elapsedDuration)+' elapsed incl. stops (timeline shows driving time only)':'');
     document.getElementById('overview-title').textContent=d.name;
     document.getElementById('overview-when').textContent=
-      d.date+' · '+d.startTime+'  ·  '+d.summary.distance.toFixed(1)+' mi  ·  '+fmtDur(d.summary.duration);
+      d.date+' · '+d.startTime+'  ·  '+d.summary.distance.toFixed(1)+' mi  ·  '+fmtDur(d.summary.duration)+
+      (d.composite?' driving':'');
     const ch=d.channels;
     const hasGps=(d.rows||[]).some(r=>r.lat!=null);
     const hasDiag=ch.coolant||ch.iat||ch.volt;
@@ -2127,7 +2273,6 @@ class Dashboard{
       (this.winStart===0&&this.winEnd>=Math.floor(d.summary.duration))
         ? 'full drive ('+fmtDur(d.summary.duration)+')'
         : this.winStart+'s – '+this.winEnd+'s  ('+fmtDur(this.winEnd-this.winStart)+')';
-    this.routeBounds=this.computeRouteBounds(d);
     this.maxSpeed=d.summary.maxSpeed||1;
     this.renderHighlights();
     this.updateDriveChip();
@@ -2167,7 +2312,9 @@ class Dashboard{
       const all=hist.map(h=>h[k]).filter(x=>x!=null);
       if(!all.length)return {rank:0,total:0,best:0};
       const sorted=[...all].sort((a,b)=>b-a);
-      return {rank:sorted.indexOf(val)+1,total:sorted.length,best:sorted[0],median:sorted[Math.floor(sorted.length/2)]};
+      // Count-based rank so values not in the per-drive list (trip/leg
+      // composites) still rank correctly; identical to indexOf for drives.
+      return {rank:sorted.filter(x=>x>val).length+1,total:sorted.length,best:sorted[0],median:sorted[Math.floor(sorted.length/2)]};
     };
     {
       const r=rankHi('maxSpeed',s.maxSpeed);
@@ -2234,16 +2381,6 @@ class Dashboard{
         (it.note?'<div class="note">'+it.note+'</div>':'')+'</div>'+
         '<div class="val">'+it.val+'</div>'+
       '</div>').join('');
-  }
-
-  computeRouteBounds(d){
-    const pts=(d.rows||[]).filter(r=>r.lat!=null);
-    if(pts.length===0)return null;
-    let loLa=Infinity,hiLa=-Infinity,loLo=Infinity,hiLo=-Infinity;
-    pts.forEach(p=>{if(p.lat<loLa)loLa=p.lat;if(p.lat>hiLa)hiLa=p.lat;
-      if(p.lon<loLo)loLo=p.lon;if(p.lon>hiLo)hiLo=p.lon;});
-    const padL=(hiLa-loLa)*0.08||0.001, padO=(hiLo-loLo)*0.08||0.001;
-    return {latMin:loLa-padL,latMax:hiLa+padL,lonMin:loLo-padO,lonMax:hiLo+padO};
   }
 
   stats(){
@@ -2314,15 +2451,7 @@ class Dashboard{
         }
       }
     });
-    this.charts.route=new Chart(document.getElementById('routeChart'),{
-      type:'scatter',
-      data:{datasets:[{data:[],pointRadius:[],pointBackgroundColor:[],
-        pointBorderWidth:0,showLine:false}]},
-      options:{plugins:{legend:{display:false},
-        tooltip:{callbacks:{label:(c)=>'t '+c.raw.t+'s  ·  '+c.raw.spd.toFixed(0)+' mph'}}},
-        scales:{x:{title:{display:true,text:'Longitude'},ticks:{maxTicksLimit:6}},
-          y:{title:{display:true,text:'Latitude'},ticks:{maxTicksLimit:5}}}}
-    });
+    this.initRouteMap();
     this.charts.power=new Chart(document.getElementById('powerChart'),{
       type:'scatter',
       data:{datasets:[
@@ -2544,26 +2673,165 @@ class Dashboard{
     c.update();
   }
 
-  updateRoute(){
-    const c=this.charts.route;
-    const d=this.currentDrive();
-    if(!this.routeBounds){c.data.datasets[0].data=[];c.update();return;}
-    c.options.scales.x.min=this.routeBounds.lonMin;
-    c.options.scales.x.max=this.routeBounds.lonMax;
-    c.options.scales.y.min=this.routeBounds.latMin;
-    c.options.scales.y.max=this.routeBounds.latMax;
-    const data=[],rad=[],col=[];
-    (d.rows||[]).forEach(r=>{
-      if(r.lat==null)return;
-      const inWin=r.t>=this.winStart&&r.t<=this.winEnd;
-      data.push({x:r.lon,y:r.lat,t:r.t,spd:r.spd});
-      rad.push(inWin?3.0:1.2);
-      col.push(inWin?speedColor(r.spd,this.maxSpeed):'#d4d6db');
+  // v2.14: Leaflet route map (replaces the Chart.js lat/lon scatter, which
+  // couldn't zoom/pan and had no basemap).
+  initRouteMap(){
+    const el = document.getElementById('routeMap');
+    if (!el || typeof L === 'undefined') { console.warn('[route] Leaflet unavailable'); return; }
+    const map = L.map(el, {preferCanvas:true, scrollWheelZoom:false, worldCopyJump:true});
+    // Standard OSM tiles (no API key). Perf-mode darkens them via a CSS
+    // filter on the tile pane rather than a second, keyed tile provider.
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(map);
+    map.setView([36.07, -79.79], 10);
+    // Wheel-zoom only after the user engages the map, so page scroll isn't hijacked.
+    map.on('click focus', () => map.scrollWheelZoom.enable());
+    map.on('mouseout blur', () => map.scrollWheelZoom.disable());
+    const self = this;
+    const Fit = L.Control.extend({
+      options: {position: 'topright'},
+      onAdd(){
+        const b = L.DomUtil.create('button', 'leaflet-bar leaflet-control-fit');
+        b.type = 'button'; b.textContent = 'Fit route'; b.title = 'Zoom to the whole route';
+        L.DomEvent.disableClickPropagation(b);
+        L.DomEvent.on(b, 'click', () => self.fitRoute());
+        return b;
+      }
     });
-    c.data.datasets[0].data=data;
-    c.data.datasets[0].pointRadius=rad;
-    c.data.datasets[0].pointBackgroundColor=col;
-    c.update();
+    map.addControl(new Fit());
+    this.routeMap = map;
+    this.routeRenderer = L.canvas({padding: 0.5});
+    this.routeLayer = L.layerGroup().addTo(map);
+    this.routeHover = L.circleMarker([0, 0], {radius: 6, color: '#fff', weight: 2,
+      fillColor: '#212529', fillOpacity: 1, renderer: this.routeRenderer});
+    this.routeHoverPts = [];
+    map.on('mousemove', e => this._routeHoverAt(e.containerPoint));
+    map.on('mouseout', () => { this.routeHover.remove(); });
+    // The overview panel starts hidden (size 0); refit once it becomes visible.
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => this.onRouteMapShown()).observe(el);
+    }
+  }
+
+  // Called when the map's container may have just become visible (sub-tab
+  // switch, resize). Also invoked synchronously from bindSubTabs so it
+  // doesn't depend on a rendering frame for the ResizeObserver to fire.
+  onRouteMapShown(){
+    const map = this.routeMap;
+    if (!map) return;
+    const el = map.getContainer();
+    if (!el.clientWidth || !el.clientHeight) return;
+    // pan:false -- an animated re-centre would clobber a pending fitBounds.
+    map.invalidateSize({pan: false});
+    if (this._routeNeedsFit) this.fitRoute();
+  }
+
+  fitRoute(){
+    const map = this.routeMap;
+    if (!map) return;
+    const el = map.getContainer();
+    if (!this.routeLatLngBounds) return;
+    if (!el.clientWidth || !el.clientHeight) { this._routeNeedsFit = true; return; }
+    map.invalidateSize({pan: false});
+    map.fitBounds(this.routeLatLngBounds, {padding: [18, 18], maxZoom: 16, animate: false});
+    this._routeNeedsFit = false;
+  }
+
+  _routeHoverAt(cp){
+    const map = this.routeMap, pts = this.routeHoverPts;
+    if (!map || !pts.length) return;
+    let best = null, bestD = 18 * 18;   // px^2 snap radius
+    for (const r of pts) {
+      const p = map.latLngToContainerPoint([r.lat, r.lon]);
+      const dd = (p.x - cp.x) ** 2 + (p.y - cp.y) ** 2;
+      if (dd < bestD) { bestD = dd; best = r; }
+    }
+    if (!best) { this.routeHover.remove(); return; }
+    const bits = ['t ' + fmtDur(best.t), (best.spd || 0).toFixed(0) + ' mph'];
+    if (best.rpm != null) bits.push(Math.round(best.rpm).toLocaleString() + ' rpm');
+    if (best.thr != null) bits.push(best.thr.toFixed(0) + '% thr');
+    const seg = this._segmentAt(best.t);
+    this.routeHover.setLatLng([best.lat, best.lon]).addTo(map)
+      .bindTooltip((seg ? seg.label + '<br>' : '') + bits.join(' · '),
+                   {direction: 'top', offset: [0, -6], className: 'route-hover'}).openTooltip();
+  }
+
+  _segmentAt(t){
+    const segs = this.currentDrive().segments;
+    if (!segs || segs.length < 2) return null;
+    return segs.find(s => t >= s.t0 && t <= s.t1) || null;
+  }
+
+  updateRoute(){
+    const map = this.routeMap;
+    if (!map) return;
+    const d = this.currentDrive();
+    this.routeLayer.clearLayers();
+    this.routeHover.remove();
+    const pts = (d.rows || []).filter(r => r.lat != null && r.lon != null);
+    this.routeHoverPts = [];
+    if (!pts.length) { this.routeLatLngBounds = null; return; }
+    const R = this.routeRenderer;
+    const segOf = r => (r._seg != null ? r._seg : 0);
+    // Split into continuous runs: break at drive boundaries and GPS gaps > 2 min.
+    const runs = []; let cur = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i-1], b = pts[i];
+      if (segOf(a) !== segOf(b) || b.t - a.t > 120) { runs.push(cur); cur = []; }
+      cur.push(b);
+    }
+    runs.push(cur);
+    const ll = r => [r.lat, r.lon];
+    const max = this.maxSpeed || 1;
+    const BUCKETS = 12;
+    const colorOf = r => speedColor(Math.round((r.spd || 0) / max * BUCKETS) / BUCKETS * max, max);
+    runs.forEach(run => {
+      // Full path in grey for context (outside the selected window).
+      L.polyline(run.map(ll), {renderer: R, color: '#9aa0a6', weight: 2, opacity: 0.55,
+                               interactive: false}).addTo(this.routeLayer);
+      // In-window path, coloured by speed bucket; consecutive same-colour
+      // points share one polyline so long trips stay fast.
+      let line = null, lineCol = null, prev = null;
+      run.forEach(r => {
+        const inWin = r.t >= this.winStart && r.t <= this.winEnd;
+        if (!inWin) { line = null; prev = null; return; }
+        const c = colorOf(r);
+        if (c !== lineCol || !line) {
+          const latlngs = prev ? [ll(prev), ll(r)] : [ll(r)];
+          line = L.polyline(latlngs, {renderer: R, color: c, weight: 4, opacity: 0.95,
+                                      interactive: false}).addTo(this.routeLayer);
+          lineCol = c;
+        } else {
+          line.addLatLng(ll(r));
+        }
+        prev = r;
+      });
+    });
+    // Markers: start, end, and stops between drives (composites only).
+    const dot = (r, fill, tip, rad) => L.circleMarker(ll(r), {renderer: R, radius: rad || 6,
+        color: '#fff', weight: 2, fillColor: fill, fillOpacity: 1}).bindTooltip(tip).addTo(this.routeLayer);
+    const segs = d.segments || [];
+    if (segs.length > 1) {
+      for (let i = 1; i < segs.length; i++) {
+        const lastPrev = pts.filter(r => segOf(r) === i - 1).pop();
+        const firstNext = pts.find(r => segOf(r) === i);
+        const at = firstNext || lastPrev;
+        if (!at) continue;
+        const gap = segs[i].gapBefore;
+        dot(at, '#495057', 'Drive ' + (i + 1) + ' of ' + segs.length + ' · ' + segs[i].date + ' ' +
+            segs[i].startTime.slice(0, 5) + (gap != null ? ' · stopped ' + fmtDur(gap) : ''), 4);
+      }
+    }
+    dot(pts[0], COL.green, 'Start · ' + d.date + ' ' + d.startTime.slice(0, 5));
+    dot(pts[pts.length - 1], COL.red, 'End');
+    // Hover targets: in-window points, thinned so mousemove stays cheap.
+    const win = pts.filter(r => r.t >= this.winStart && r.t <= this.winEnd);
+    this.routeHoverPts = sample(win, 2500);
+    this.routeLatLngBounds = L.latLngBounds(pts.map(ll));
+    // Refit only when the selection changes; sliding the window keeps the user's zoom.
+    if (this._routeFitId !== d.id) { this._routeFitId = d.id; this.fitRoute(); }
   }
 
   updatePower(){
@@ -2893,12 +3161,20 @@ class Dashboard{
       h+='<th data-f="'+c.f+'">'+c.l+ar+'</th>';
     });
     h+='</tr></thead><tbody>';
-    f.forEach(r=>{
+    // v2.14: cap rendered rows -- a whole trip is 50k+ seconds and building
+    // that much DOM froze the page. Sorting still runs over every row.
+    const TABLE_MAX_ROWS=2000;
+    f.slice(0,TABLE_MAX_ROWS).forEach(r=>{
       h+='<tr>';cols.forEach(c=>{
         const v=r[c.f];
         h+='<td>'+(v==null?NA:Number(v).toFixed(c.d))+'</td>';
       });h+='</tr>';
     });
+    if(f.length>TABLE_MAX_ROWS){
+      h+='<tr><td colspan="'+cols.length+'" style="text-align:center;color:var(--text-secondary);">'+
+        'Showing first '+TABLE_MAX_ROWS.toLocaleString()+' of '+f.length.toLocaleString()+
+        ' rows; sort a column or narrow the time window to see others.</td></tr>';
+    }
     h+='</tbody>';
     const tbl=document.getElementById('detailTable');
     tbl.innerHTML=h;
@@ -4092,6 +4368,7 @@ class Dashboard{
         const on = p.dataset.subtab === sub;
         p.hidden = !on;
       });
+      if (sub === 'overview') self.onRouteMapShown();
       // After reveal, resize any Chart.js inside the new panel
       requestAnimationFrame(() => {
         const panel = root.querySelector(':scope > .subtab-panel[data-subtab="'+sub+'"]');
@@ -4401,20 +4678,28 @@ class Dashboard{
   }
 
   renderSheet(list){
-    list.innerHTML = this.drives.map(d => {
-      const active = d.id === this.currentId ? ' active' : '';
-      const s = d.summary;
-      const dur = fmtDur(s.duration);
-      const bits = [
-        s.distance.toFixed(1) + ' mi',
-        dur,
-        s.maxSpeed.toFixed(0) + ' mph top',
-      ];
-      if (s.mpg) bits.push(s.mpg.toFixed(1) + ' mpg');
-      if (s.peakPwr) bits.push(s.peakPwr.toFixed(0) + ' hp');
-      return '<button type="button" class="drive-card' + active + '" data-id="' + d.id + '">' +
-        '<div class="when">' + d.date + ' &middot; ' + d.startTime.slice(0,5) + '</div>' +
-        '<div class="name">' + d.name + '</div>' +
+    list.innerHTML = this.selectorEntries().map(e => {
+      const active = e.value === this.currentId ? ' active' : '';
+      const cls = 'drive-card' + active + (e.kind !== 'drive' ? ' group' : '') + (e.lvl ? ' lvl-' + Math.min(e.lvl, 2) : '');
+      let when, name, bits;
+      if (e.kind === 'drive') {
+        const d = e.d, s = d.summary;
+        when = d.date + ' &middot; ' + d.startTime.slice(0,5);
+        name = d.name;
+        bits = [s.distance.toFixed(1) + ' mi', fmtDur(s.duration), s.maxSpeed.toFixed(0) + ' mph top'];
+        if (s.mpg) bits.push(s.mpg.toFixed(1) + ' mpg');
+        if (s.peakPwr) bits.push(s.peakPwr.toFixed(0) + ' hp');
+      } else {
+        const g = e.g;
+        when = (e.kind === 'trip' ? 'Trip' : 'Leg') + ' &middot; ' + g.date +
+               (g.endDate && g.endDate !== g.date ? ' &rarr; ' + g.endDate : ' &middot; ' + g.startTime.slice(0,5));
+        name = e.kind === 'trip' ? g.legCount + ' legs, ' + g.driveCount + ' drives' : g.driveCount + ' drives';
+        bits = [g.distance.toFixed(1) + ' mi', fmtDur(g.drivingDuration) + ' driving'];
+        if (g.gapDuration > 0) bits.push(fmtDur(g.gapDuration) + ' stopped');
+      }
+      return '<button type="button" class="' + cls + '" data-id="' + e.value + '">' +
+        '<div class="when">' + when + '</div>' +
+        '<div class="name">' + name + '</div>' +
         '<div class="stats">' + bits.join(' &middot; ') + '</div>' +
       '</button>';
     }).join('');
@@ -4467,7 +4752,7 @@ class Dashboard{
 
 }
 
-new Dashboard(RAW);
+window.dashboard = new Dashboard(RAW);   // exposed for console debugging
 </script>
 </body>
 </html>

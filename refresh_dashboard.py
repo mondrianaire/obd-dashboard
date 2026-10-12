@@ -53,6 +53,17 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.14 - Drive -> leg -> trip hierarchy + real map.
+#           - prep: legs = drives stitched across stops (old v2.13 "trips");
+#             trips = legs chained from leaving home until a leg ends home
+#             (home = most common leg endpoint). RAW.legs + RAW.trips.
+#           - Selector (desktop + mobile sheet) can pick a whole trip or leg;
+#             it renders as one composite drive (rows concatenated on a
+#             driving-time axis) so every single-drive view works on it.
+#           - GPS route is a Leaflet map on OpenStreetMap tiles: pan/zoom,
+#             speed-coloured path, start/end/stop markers, hover readout.
+#           - Chart.js min/max decimation for long line series and a 2,000
+#             row cap on the per-second table (whole trips are 50k+ rows).
 #   v2.13.2 - GPS spike scrub + dropout-aware trip stitching. OBD Fusion logs
 #           a garbage first GPS fix (e.g. 7.48,-15.49) almost every drive, so
 #           the stitcher saw legs as thousands of miles apart. prep now nulls
@@ -188,7 +199,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.13.2"
+VERSION = "v2.14"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.

@@ -461,7 +461,8 @@ def _hav_mi(a, b):
     return 2 * R * math.asin(math.sqrt(h))
 
 def test_trips(raw):
-    """v2.13.2: GPS teleport spikes are scrubbed and trips partition the drives."""
+    """v2.13.2: GPS teleport spikes are scrubbed. v2.14: legs and trips each
+    partition the drives, and legs nest inside trips."""
     cat = "trips"
     teleports = []
     for d in raw["drives"]:
@@ -473,17 +474,32 @@ def test_trips(raw):
     record(cat, "no GPS jumps > 50 mi between consecutive fixes",
            PASS if not teleports else FAIL,
            f"{len(teleports)} drives: {teleports[:3]}" if teleports else "")
+    # v2.14 hierarchy: drive -> leg -> trip
+    legs = raw.get("legs", [])
     trips = raw.get("trips", [])
-    leg_ids = [l for t in trips for l in t.get("legIds", [])]
-    drive_ids = [d["id"] for d in raw["drives"]]
-    record(cat, "trip legs cover every drive exactly once",
-           PASS if sorted(leg_ids) == sorted(drive_ids) else FAIL,
-           f"{len(trips)} trips / {len(drive_ids)} drives")
+    drive_ids = sorted(d["id"] for d in raw["drives"])
     by_id = {d["id"]: d for d in raw["drives"]}
+    for kind, groups in (("legs", legs), ("trips", trips)):
+        covered = sorted(i for g in groups for i in g.get("driveIds", []))
+        record(cat, f"{kind} cover every drive exactly once",
+               PASS if covered == drive_ids else FAIL,
+               f"{len(groups)} {kind} / {len(drive_ids)} drives")
+        bad = [g["id"] for g in groups
+               if abs(sum(by_id[i]["summary"]["distance"] for i in g["driveIds"] if i in by_id)
+                      - g["distance"]) > 0.05]
+        record(cat, f"{kind[:-1]}.distance == sum of drive distances",
+               PASS if not bad else FAIL, f"mismatched: {bad[:3]}" if bad else "")
+    leg_by_id = {l["id"]: l for l in legs}
     bad = [t["id"] for t in trips
-           if abs(sum(by_id[l]["summary"]["distance"] for l in t["legIds"] if l in by_id) - t["distance"]) > 0.05]
-    record(cat, "trip.distance == sum of leg distances",
-           PASS if not bad else FAIL, f"mismatched: {bad[:3]}" if bad else "")
+           if sorted(i for l in t["legIds"] for i in leg_by_id.get(l, {}).get("driveIds", []))
+              != sorted(t["driveIds"])
+           or any(leg_by_id.get(l, {}).get("tripId") != t["id"] for l in t["legIds"])]
+    record(cat, "each trip's legs nest exactly (leg.tripId, driveIds agree)",
+           PASS if not bad else FAIL, f"inconsistent: {bad[:3]}" if bad else "")
+    bad = [d["id"] for d in raw["drives"]
+           if leg_by_id.get(d.get("legId"), {}).get("tripId") != d.get("tripId")]
+    record(cat, "drive.legId / drive.tripId agree with leg table",
+           PASS if not bad else FAIL, f"{len(bad)} drives: {bad[:3]}" if bad else "")
 
 def main():
     if not os.path.exists(JSON_PATH):

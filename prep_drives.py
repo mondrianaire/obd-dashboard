@@ -617,17 +617,25 @@ for d in DRIVES:
 # samples, shift events) in main. Dashboard fleet charts read from these
 # precomputed aggregates instead of iterating raw rows.
 #
-# ALSO: a trip-stitching pass groups contiguous drives (same-ish location,
-# close in time) into one "trip" so NC->NYC with gas stops shows as one entry.
+# ALSO (v2.14 hierarchy): drive -> leg -> trip.
+#   drive = one log file.
+#   leg   = contiguous drives stitched across short stops (gas, breaks):
+#           gap <= LEG_TEMPORAL_GAP_S and next drive starts where the last
+#           ended (or plausibly reachable after a mid-drive logger dropout).
+#   trip  = consecutive legs from leaving HOME until a leg ends back home
+#           ("there and back", e.g. NC->NYC + NYC->NC). Home is the most
+#           common leg endpoint, so no location is hard-coded.
 
 from datetime import datetime as _dt_cls
 
-TRIP_TEMPORAL_GAP_S  = 4 * 3600  # within 4 hours = same trip
-TRIP_SPATIAL_GAP_MI  = 1.0       # within 1 mile = same location
-# v2.13.2: if the previous leg ENDS while moving, the logger dropped out
+LEG_TEMPORAL_GAP_S   = 4 * 3600  # within 4 hours = same leg
+LEG_SPATIAL_GAP_MI   = 1.0       # within 1 mile = same location
+# v2.13.2: if the previous drive ENDS while moving, the logger dropped out
 # mid-drive (not a stop) -- allow the car to have covered gap_hours * this.
-TRIP_DROPOUT_MPH     = 85
-TRIP_DROPOUT_MIN_SPD = 5         # mph at end of prev leg to count as "still moving"
+LEG_DROPOUT_MPH      = 85
+LEG_DROPOUT_MIN_SPD  = 5         # mph at end of prev drive to count as "still moving"
+HOME_RADIUS_MI       = 3.0       # leg endpoint this close to home = "at home"
+TRIP_MAX_SPAN_S      = 14 * 86400  # safety valve: a trip never spans > 14 days
 FLEET_SAMPLE_STRIDE  = 10        # every Nth row goes into agg.samples (for scatters)
 
 # Match the dashboard's gear-inference bounds and shift-plausibility logic so
@@ -721,10 +729,10 @@ def _last_gps(rows):
         if lat is not None and lon is not None: return (lat, lon)
     return None
 
-def _compute_trips(drives):
-    """Assign tripId to each drive. Drives are already sorted by (date, startTime)."""
+def _compute_legs(drives):
+    """Assign legId to each drive. Drives are already sorted by (date, startTime)."""
     for d in drives:
-        d['tripId'] = d['id']
+        d['legId'] = d['id']
     stitched = 0; dropouts = 0
     for i in range(1, len(drives)):
         prev = drives[i-1]; cur = drives[i]
@@ -732,44 +740,88 @@ def _compute_trips(drives):
         if not prev_dt or not cur_dt: continue
         prev_end = prev_dt.timestamp() + prev['summary']['duration']
         gap_s = cur_dt.timestamp() - prev_end
-        if gap_s < 0 or gap_s > TRIP_TEMPORAL_GAP_S: continue
+        if gap_s < 0 or gap_s > LEG_TEMPORAL_GAP_S: continue
         prev_rows = prev.get('rows', [])
         p = _last_gps(prev_rows); c = _first_gps(cur.get('rows', []))
         if not p or not c: continue
         dist = _haversine_mi(*p, *c)
-        limit = TRIP_SPATIAL_GAP_MI
-        if prev_rows and (prev_rows[-1].get('spd') or 0) >= TRIP_DROPOUT_MIN_SPD:
-            limit += TRIP_DROPOUT_MPH * gap_s / 3600.0
-            if dist <= limit and dist > TRIP_SPATIAL_GAP_MI: dropouts += 1
+        limit = LEG_SPATIAL_GAP_MI
+        if prev_rows and (prev_rows[-1].get('spd') or 0) >= LEG_DROPOUT_MIN_SPD:
+            limit += LEG_DROPOUT_MPH * gap_s / 3600.0
+            if dist <= limit and dist > LEG_SPATIAL_GAP_MI: dropouts += 1
         if dist > limit: continue
-        cur['tripId'] = prev['tripId']
+        cur['legId'] = prev['legId']
         stitched += 1
-    print(f"  Trip stitching: {stitched} drives joined to previous (<= {TRIP_TEMPORAL_GAP_S}s gap, "
-          f"<= {TRIP_SPATIAL_GAP_MI} mi apart; {dropouts} via mid-drive logger dropout)")
+    print(f"  Leg stitching: {stitched} drives joined to previous (<= {LEG_TEMPORAL_GAP_S}s gap, "
+          f"<= {LEG_SPATIAL_GAP_MI} mi apart; {dropouts} via mid-drive logger dropout)")
 
-def _build_trips_summary(drives):
+def _group(drives, key):
     groups = {}
     for d in drives:
-        groups.setdefault(d['tripId'], []).append(d)
+        groups.setdefault(d[key], []).append(d)
+    return list(groups.values())   # insertion order == chronological
+
+def _find_home(legs):
+    """Most common leg endpoint (0.01 deg grid, ~0.7 mi), averaged within the cell."""
+    cells = {}
+    for ds in legs:
+        for p in (_first_gps(ds[0].get('rows', [])), _last_gps(ds[-1].get('rows', []))):
+            if p: cells.setdefault((round(p[0], 2), round(p[1], 2)), []).append(p)
+    if not cells: return None
+    pts = max(cells.values(), key=len)
+    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+
+def _compute_trips(drives):
+    """Assign tripId: legs chain from leaving home until a leg ends at home.
+    A leg that starts at home always opens a new trip (the car got home
+    unlogged). Must run after _compute_legs and before rows are stripped."""
+    legs = _group(drives, 'legId')
+    home = _find_home(legs)
+    def at_home(p):
+        return p is None or home is None or _haversine_mi(*p, *home) <= HOME_RADIUS_MI
+    trip = None; trip_start = None
+    for ds in legs:
+        first_dt = _parse_drive_dt(ds[0]); last_dt = _parse_drive_dt(ds[-1])
+        leg_end_ts = last_dt.timestamp() + ds[-1]['summary']['duration'] if last_dt else None
+        joins = (trip is not None and trip_start is not None and leg_end_ts is not None
+                 and not at_home(_first_gps(ds[0].get('rows', [])))
+                 and leg_end_ts - trip_start <= TRIP_MAX_SPAN_S)
+        if not joins:
+            trip = ds[0]['id']
+            trip_start = first_dt.timestamp() if first_dt else None
+        for d in ds: d['tripId'] = trip
+        if at_home(_last_gps(ds[-1].get('rows', []))):
+            trip = None
+    home_s = f"({home[0]:.3f}, {home[1]:.3f})" if home else "unknown"
+    print(f"  Home inferred at {home_s}; trips chain legs until one ends within {HOME_RADIUS_MI} mi of it")
+
+def _group_summary(ds):
+    first = ds[0]; last = ds[-1]
+    first_dt = _parse_drive_dt(first); last_dt = _parse_drive_dt(last)
+    total_dist = round(sum(d['summary']['distance'] for d in ds), 2)
+    total_dur = round(sum(d['summary']['duration'] for d in ds), 0)
+    elapsed = (last_dt.timestamp() + last['summary']['duration'] - first_dt.timestamp()
+               if first_dt and last_dt else total_dur)
+    return {
+        'date': first['date'], 'startTime': first['startTime'],
+        'endDate': last['date'],
+        'driveIds': [d['id'] for d in ds], 'driveCount': len(ds),
+        'distance': total_dist,
+        'drivingDuration': total_dur,
+        'elapsedDuration': round(elapsed, 0),
+        'gapDuration': round(elapsed - total_dur, 0),
+    }
+
+def _build_legs_summary(drives):
+    return [{'id': ds[0]['legId'], 'tripId': ds[0]['tripId'], **_group_summary(ds)}
+            for ds in _group(drives, 'legId')]
+
+def _build_trips_summary(drives, legs):
     out = []
-    for tid, legs in groups.items():
-        legs.sort(key=lambda x: (x['date'], x['startTime']))
-        first = legs[0]; last = legs[-1]
-        first_dt = _parse_drive_dt(first); last_dt = _parse_drive_dt(last)
-        total_dist = round(sum(l['summary']['distance'] for l in legs), 2)
-        total_dur = round(sum(l['summary']['duration'] for l in legs), 0)
-        elapsed = (last_dt.timestamp() + last['summary']['duration'] - first_dt.timestamp()
-                   if first_dt and last_dt else total_dur)
-        out.append({
-            'id': tid, 'date': first['date'], 'startTime': first['startTime'],
-            'name': first['name'] + (f" + {len(legs)-1} more legs" if len(legs) > 1 else ""),
-            'legCount': len(legs), 'legIds': [l['id'] for l in legs],
-            'distance': total_dist,
-            'drivingDuration': total_dur,
-            'elapsedDuration': round(elapsed, 0),
-            'gapDuration': round(elapsed - total_dur, 0),
-        })
-    out.sort(key=lambda t: (t['date'], t['startTime']))
+    for ds in _group(drives, 'tripId'):
+        tid = ds[0]['tripId']
+        leg_ids = [l['id'] for l in legs if l['tripId'] == tid]
+        out.append({'id': tid, 'legIds': leg_ids, 'legCount': len(leg_ids), **_group_summary(ds)})
     return out
 
 def _compute_drive_aggregates(d):
@@ -814,10 +866,13 @@ def _compute_drive_aggregates(d):
         'shifts': shifts,
     }
 
-# Trip stitching + per-drive aggregates
+# Leg stitching + trip grouping + per-drive aggregates
+_compute_legs(DRIVES)
 _compute_trips(DRIVES)
-TRIPS = _build_trips_summary(DRIVES)
-print(f"  Trips: {len(TRIPS)} unique (from {len(DRIVES)} drive legs)")
+LEGS = _build_legs_summary(DRIVES)
+TRIPS = _build_trips_summary(DRIVES, LEGS)
+print(f"  {len(DRIVES)} drives -> {len(LEGS)} legs -> {len(TRIPS)} trips "
+      f"({sum(1 for t in TRIPS if t['legCount'] > 1)} multi-leg trips)")
 for d in DRIVES:
     d['agg'] = _compute_drive_aggregates(d)
 
@@ -864,7 +919,7 @@ totals = {
     'vin':          VIN,
 }
 
-out = {'drives': DRIVES, 'trips': TRIPS, 'historical': hist, 'totals': totals}
+out = {'drives': DRIVES, 'legs': LEGS, 'trips': TRIPS, 'historical': hist, 'totals': totals}
 with open(OUT, 'w') as f:
     json.dump(out, f, separators=(',', ':'),
               default=lambda x: None if (isinstance(x, float) and math.isnan(x)) else x)

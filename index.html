@@ -1289,7 +1289,7 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
       </section>
 
 
-  <div class="version-badge" title="Dashboard build">v2.14 · build 2026-10-12 · 93 drives</div>
+  <div class="version-badge" title="Dashboard build">v2.14.1 · build 2026-10-12 · 93 drives</div>
 
   <footer class="dashboard-footer">
     <span id="footer-meta"></span>
@@ -1304,7 +1304,7 @@ body.perf-mode .sector-table .slowest{color:var(--perf-red);}
   <div class="drive-sheet-list" id="sheet-list"></div>
 </div>
 
-<script src="telemetry_data.js"></script>
+<script src="telemetry_data.js?v=82b344185c"></script>
 <script>
 const RAW = window.RAW;
 
@@ -1759,7 +1759,8 @@ class Dashboard{
     if (d._rowsPromise) return d._rowsPromise;
     d._rowsPromise = (async () => {
       try {
-        const resp = await fetch('drives/' + encodeURIComponent(d.id) + '.json',
+        const resp = await fetch('drives/' + encodeURIComponent(d.id) + '.json' +
+                                  (d.rowsHash ? '?v=' + d.rowsHash : ''),
                                   { cache: 'default' });
         if (!resp.ok) throw new Error('drive-file-' + resp.status);
         const payload = await resp.json();

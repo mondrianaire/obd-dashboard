@@ -8,7 +8,7 @@ Path conventions (overridable via environment variables):
 Dedupe rule: if a Dropbox CSV matches a .dlg file by start timestamp,
 the .dlg version wins (it has wideband AFR/MAP).
 """
-import pandas as pd, numpy as np, json, math, sqlite3, os, glob, re
+import pandas as pd, numpy as np, json, math, sqlite3, os, glob, re, hashlib
 
 HERE        = os.path.dirname(os.path.abspath(__file__))
 VIN         = '3VW5T7AU2GM058168'
@@ -887,9 +887,14 @@ _total_row_bytes = 0
 for d in DRIVES:
     rows_path = os.path.join(DRIVES_DIR, d['id'] + '.json')
     payload = {'id': d['id'], 'rows': d.get('rows', [])}
+    body = json.dumps(payload, separators=(',', ':'),
+                      default=lambda x: None if (isinstance(x, float) and math.isnan(x)) else x)
     with open(rows_path, 'w') as f:
-        json.dump(payload, f, separators=(',', ':'),
-                  default=lambda x: None if (isinstance(x, float) and math.isnan(x)) else x)
+        f.write(body)
+    # v2.14.1: content hash -> dashboard fetches drives/<id>.json?v=<hash>, so a
+    # browser never pairs fresh summaries with a stale cached row file
+    # (GitHub Pages caches 10 min) and unchanged files stay cached.
+    d['rowsHash'] = hashlib.sha1(body.encode('utf-8')).hexdigest()[:10]
     _total_row_bytes += os.path.getsize(rows_path)
     d.pop('rows', None)
 print(f"  Wrote {len(DRIVES)} per-drive row files to drives/ ({_total_row_bytes:,} bytes total)")

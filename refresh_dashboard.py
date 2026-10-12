@@ -14,7 +14,7 @@ Skip the Dropbox->data/ rotation pre-step with --no-rotate (e.g. when running
 from a worktree that should not touch Dropbox).
 """
 from __future__ import annotations
-import subprocess, sys, json, re, os, datetime, time, io
+import subprocess, sys, json, re, os, datetime, time, io, hashlib
 
 # Force UTF-8 for stdout so console prints work when the script is launched
 # from Windows Task Scheduler (which inherits cp1252 by default).
@@ -53,6 +53,10 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.14.1 - Cache-busting: index.html loads telemetry_data.js?v=<sha> and
+#           drive rows load as drives/<id>.json?v=<rowsHash>. After the v2.14
+#           deploy, browsers paired the new page with a 10-min-cached old
+#           data file (no RAW.legs) and trip selection threw.
 #   v2.14 - Drive -> leg -> trip hierarchy + real map.
 #           - prep: legs = drives stitched across stops (old v2.13 "trips");
 #             trips = legs chained from leaving home until a leg ends home
@@ -199,11 +203,14 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.14"
+VERSION = "v2.14.1"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
 MIDDOT = "·"
+
+# <script> tag that loads the dataset, with or without a ?v=<hash> cache-buster.
+DATA_SCRIPT_RE = r'<script src="telemetry_data\.js(?:\?v=[0-9a-f]+)?"></script>'
 
 
 def step(n, total, msg):
@@ -313,8 +320,13 @@ def inject(meta: dict):
     # telemetry_data.js as `window.RAW = {...};` and index.html loads it via
     # <script src="telemetry_data.js"></script>. Result: index.html shrinks
     # from ~14 MB to ~180 KB and stays editable.
-    write_text(JS_PATH, "window.RAW = " + data + ";\n")
+    js = "window.RAW = " + data + ";\n"
+    write_text(JS_PATH, js)
     print(f"  Data JS size: {os.path.getsize(JS_PATH):,} bytes")
+    # v2.14.1: cache-bust the data script with a content hash. GitHub Pages
+    # serves max-age=600, so without this a returning visitor could run new
+    # index.html code against a stale cached telemetry_data.js.
+    data_hash = hashlib.sha1(js.encode("utf-8")).hexdigest()[:10]
     # v2.8: thin manifest for lightweight consumers
     write_status_manifest(meta)
     print(f"  Status:       {os.path.getsize(STATUS_PATH):,} bytes "
@@ -332,10 +344,16 @@ def inject(meta: dict):
     new_html, vn = re.subn(badge_re, badge, html, count=1)
     if vn != 1:
         print("  (note: version badge anchor not found - leaving as-is)")
+    new_html, sn = re.subn(DATA_SCRIPT_RE,
+                           f'<script src="telemetry_data.js?v={data_hash}"></script>',
+                           new_html, count=1)
+    if sn != 1:
+        sys.exit("  ! index.html is missing the <script src=\"telemetry_data.js\"> tag")
     if new_html != html:
         write_text(HTML_PATH, new_html)
     print(f"  HTML size: {len(new_html):,} bytes")
     print(f"  Badge:     {badge}")
+    print(f"  Data tag:  telemetry_data.js?v={data_hash}")
 
 
 def verify(meta: dict):
@@ -347,7 +365,7 @@ def verify(meta: dict):
     if js_sz < 100_000:
         sys.exit(f"  ! telemetry_data.js suspiciously small ({js_sz} bytes)")
     html_full = read_text(HTML_PATH)
-    if 'src="telemetry_data.js"' not in html_full:
+    if not re.search(DATA_SCRIPT_RE, html_full):
         sys.exit("  ! index.html is missing <script src=\"telemetry_data.js\"> reference")
 
     # v2.8: end-to-end correctness, not just size. Parse the JS file we just

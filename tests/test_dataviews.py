@@ -453,6 +453,38 @@ def test_anomalies(raw):
             record(cat, f"{d['name']}: RPM spike count (Δ>3000 in 1s)", status, f"{spikes}")
 
 # ----- Main ----------------------------------------------------------------
+def _hav_mi(a, b):
+    R = 3959
+    dlat = math.radians(b[0] - a[0]); dlon = math.radians(b[1] - a[1])
+    h = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.sin(dlon / 2) ** 2)
+    return 2 * R * math.asin(math.sqrt(h))
+
+def test_trips(raw):
+    """v2.13.2: GPS teleport spikes are scrubbed and trips partition the drives."""
+    cat = "trips"
+    teleports = []
+    for d in raw["drives"]:
+        fixes = [(r["lat"], r["lon"]) for r in d.get("rows", [])
+                 if r.get("lat") is not None and r.get("lon") is not None]
+        for a, b in zip(fixes, fixes[1:]):
+            if _hav_mi(a, b) > 50:
+                teleports.append(d["name"]); break
+    record(cat, "no GPS jumps > 50 mi between consecutive fixes",
+           PASS if not teleports else FAIL,
+           f"{len(teleports)} drives: {teleports[:3]}" if teleports else "")
+    trips = raw.get("trips", [])
+    leg_ids = [l for t in trips for l in t.get("legIds", [])]
+    drive_ids = [d["id"] for d in raw["drives"]]
+    record(cat, "trip legs cover every drive exactly once",
+           PASS if sorted(leg_ids) == sorted(drive_ids) else FAIL,
+           f"{len(trips)} trips / {len(drive_ids)} drives")
+    by_id = {d["id"]: d for d in raw["drives"]}
+    bad = [t["id"] for t in trips
+           if abs(sum(by_id[l]["summary"]["distance"] for l in t["legIds"] if l in by_id) - t["distance"]) > 0.05]
+    record(cat, "trip.distance == sum of leg distances",
+           PASS if not bad else FAIL, f"mismatched: {bad[:3]}" if bad else "")
+
 def main():
     if not os.path.exists(JSON_PATH):
         print(f"FATAL: {JSON_PATH} not found.")
@@ -484,6 +516,7 @@ def main():
     test_shifts(raw)
     test_aggregates(raw)
     test_anomalies(raw)
+    test_trips(raw)
 
     # Print report grouped by category
     by_cat: dict[str, list] = {}
@@ -492,7 +525,7 @@ def main():
 
     n_pass = n_warn = n_fail = 0
     print()
-    for cat in ("schema", "bounds", "consistency", "shifts", "aggregates", "anomalies"):
+    for cat in ("schema", "bounds", "consistency", "shifts", "aggregates", "anomalies", "trips"):
         entries = by_cat.get(cat, [])
         if not entries:
             continue

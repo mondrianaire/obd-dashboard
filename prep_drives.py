@@ -67,6 +67,46 @@ PLAUSIBLE = {
 }
 
 
+GPS_MAX_MPH = 150          # implied speed above this between consecutive fixes = teleport
+GPS_ENDPOINT_JUMP_MI = 5   # first/last fix must also jump this far to be dropped
+
+def _gps_mi(a, b):
+    R = 3959
+    dlat = math.radians(b[0] - a[0]); dlon = math.radians(b[1] - a[1])
+    h = (math.sin(dlat/2)**2 +
+         math.cos(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.sin(dlon/2)**2)
+    return 2 * R * math.asin(math.sqrt(h))
+
+def _scrub_gps_spikes(buckets):
+    """v2.13.2: null lat/lon on fixes that teleport away from ALL their GPS
+    neighbours. OBD Fusion logs a garbage first fix almost every time
+    (e.g. 7.48,-15.49 one second before 37.40,-77.43), which broke trip
+    stitching and route-map bounds. Some phones also deliver GPS in lagged
+    bursts (~1 mi between 1 s-apart fixes), so implied speed alone isn't
+    enough: an interior fix is a spike only if its two neighbours agree with
+    each other, and an endpoint only if it jumps > GPS_ENDPOINT_JUMP_MI."""
+    idx = [i for i, b in enumerate(buckets) if b['lat'] is not None and b['lon'] is not None]
+    if len(idx) < 2: return 0
+    def pos(i): return (buckets[i]['lat'], buckets[i]['lon'])
+    def implausible(i, j):
+        dt_h = max(abs(buckets[j]['t'] - buckets[i]['t']), 1.0) / 3600.0
+        mi = _gps_mi(pos(i), pos(j))
+        return mi > 0.5 and mi / dt_h > GPS_MAX_MPH, mi
+    bad = []
+    for k, i in enumerate(idx):
+        if k == 0 or k == len(idx) - 1:
+            j = idx[1] if k == 0 else idx[-2]
+            imp, mi = implausible(i, j)
+            if imp and mi > GPS_ENDPOINT_JUMP_MI: bad.append(i)
+            continue
+        p, n = idx[k-1], idx[k+1]
+        imp_p, d_p = implausible(i, p); imp_n, d_n = implausible(i, n)
+        if imp_p and imp_n and _gps_mi(pos(p), pos(n)) < 0.5 * min(d_p, d_n):
+            bad.append(i)
+    for i in bad:
+        buckets[i]['lat'] = buckets[i]['lon'] = None
+    return len(bad)
+
 def bucket(rows, channels, name, date, startTime, source):
     df = pd.DataFrame(rows)
     # Canonical column list. Anything missing in `rows` is created as NaN so the
@@ -192,6 +232,7 @@ def bucket(rows, channels, name, date, startTime, source):
             row['az'] = _rnd(r['az_m'], 2)
         if channels.get('icTempF'): row['icTempF'] = _rnd(r['icTempF_m'], 1)
         buckets.append(row)
+    _scrub_gps_spikes(buckets)
 
     real_dur = float(df['t'].iloc[-1] - df['t'].iloc[0])
     def maxof(col):
@@ -583,6 +624,10 @@ from datetime import datetime as _dt_cls
 
 TRIP_TEMPORAL_GAP_S  = 4 * 3600  # within 4 hours = same trip
 TRIP_SPATIAL_GAP_MI  = 1.0       # within 1 mile = same location
+# v2.13.2: if the previous leg ENDS while moving, the logger dropped out
+# mid-drive (not a stop) -- allow the car to have covered gap_hours * this.
+TRIP_DROPOUT_MPH     = 85
+TRIP_DROPOUT_MIN_SPD = 5         # mph at end of prev leg to count as "still moving"
 FLEET_SAMPLE_STRIDE  = 10        # every Nth row goes into agg.samples (for scatters)
 
 # Match the dashboard's gear-inference bounds and shift-plausibility logic so
@@ -680,7 +725,7 @@ def _compute_trips(drives):
     """Assign tripId to each drive. Drives are already sorted by (date, startTime)."""
     for d in drives:
         d['tripId'] = d['id']
-    stitched = 0
+    stitched = 0; dropouts = 0
     for i in range(1, len(drives)):
         prev = drives[i-1]; cur = drives[i]
         prev_dt = _parse_drive_dt(prev); cur_dt = _parse_drive_dt(cur)
@@ -688,12 +733,19 @@ def _compute_trips(drives):
         prev_end = prev_dt.timestamp() + prev['summary']['duration']
         gap_s = cur_dt.timestamp() - prev_end
         if gap_s < 0 or gap_s > TRIP_TEMPORAL_GAP_S: continue
-        p = _last_gps(prev.get('rows', [])); c = _first_gps(cur.get('rows', []))
+        prev_rows = prev.get('rows', [])
+        p = _last_gps(prev_rows); c = _first_gps(cur.get('rows', []))
         if not p or not c: continue
-        if _haversine_mi(*p, *c) > TRIP_SPATIAL_GAP_MI: continue
+        dist = _haversine_mi(*p, *c)
+        limit = TRIP_SPATIAL_GAP_MI
+        if prev_rows and (prev_rows[-1].get('spd') or 0) >= TRIP_DROPOUT_MIN_SPD:
+            limit += TRIP_DROPOUT_MPH * gap_s / 3600.0
+            if dist <= limit and dist > TRIP_SPATIAL_GAP_MI: dropouts += 1
+        if dist > limit: continue
         cur['tripId'] = prev['tripId']
         stitched += 1
-    print(f"  Trip stitching: {stitched} drives joined to previous (<= {TRIP_TEMPORAL_GAP_S}s gap, <= {TRIP_SPATIAL_GAP_MI} mi apart)")
+    print(f"  Trip stitching: {stitched} drives joined to previous (<= {TRIP_TEMPORAL_GAP_S}s gap, "
+          f"<= {TRIP_SPATIAL_GAP_MI} mi apart; {dropouts} via mid-drive logger dropout)")
 
 def _build_trips_summary(drives):
     groups = {}

@@ -10,6 +10,8 @@ Steps:
   4. (optional) git add / commit / push so local + remote stay in sync.
 
 Skip git with --no-git or by setting NO_GIT=1.
+Skip the Dropbox->data/ rotation pre-step with --no-rotate (e.g. when running
+from a worktree that should not touch Dropbox).
 """
 from __future__ import annotations
 import subprocess, sys, json, re, os, datetime, time, io
@@ -51,6 +53,14 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #   v1.9 - shift detection plausibility filter + regime now uses physics-derived
 #          landing RPM (idealLandingRpm) rather than the noisy 1-sec-later toRpm,
 #          fixing apparent over-redline shifts caused by sample lag
+#   v2.13.2 - GPS spike scrub + dropout-aware trip stitching. OBD Fusion logs
+#           a garbage first GPS fix (e.g. 7.48,-15.49) almost every drive, so
+#           the stitcher saw legs as thousands of miles apart. prep now nulls
+#           fixes that teleport (>150 mph implied) from all neighbours, and a
+#           leg that ENDS while moving (logger dropout) may be up to
+#           gap_hours * 85 mi from the next. Adds --no-rotate flag.
+#   v2.13.1 - Fix blank charts: remaining d.rows readers use lazy-loaded rows
+#           or precomputed per-drive aggregates.
 #   v2.13 - Per-drive file split + trip stitching (unblock deployment).
 #           PROBLEM: telemetry_data.{json,js} crossed GitHub's 100 MB
 #           per-file limit after the two NC->NYC trips (93 drives, 100.5 MB),
@@ -178,7 +188,7 @@ HTML_PATH = os.path.join(HERE, "index.html")
 #          - LTFT / coolant / knock-rate fleet trends (Health, renamed from Diag)
 #          + per-drive summary: knockEvents, knockEventRate, avgLTFT,
 #            avgWarmCoolant, peakTqMoment, peakPwrMoment, peakBoostMoment
-VERSION = "v2.13"
+VERSION = "v2.13.2"
 
 # Middle-dot character used in the version badge. Kept as a constant so the
 # regex and the replacement string use the same byte sequence.
@@ -449,7 +459,8 @@ def run_tests():
 
 def main():
     skip_git = "--no-git" in sys.argv or os.environ.get("NO_GIT") == "1"
-    rotate_old_csvs()
+    if "--no-rotate" not in sys.argv:
+        rotate_old_csvs()
     meta = run_prep()
     inject(meta)
     verify(meta)

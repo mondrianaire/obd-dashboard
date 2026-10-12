@@ -4647,6 +4647,7 @@ class Dashboard{
       document.querySelectorAll('.section[data-tab]').forEach(s => {
         s.classList.toggle('mobile-hide', s.dataset.tab !== tab);
       });
+      this.onRouteMapShown();   // route map may have just become visible
     };
     tabs.forEach(b => b.addEventListener('click', () => apply(b.dataset.tab)));
     if (this.isMobile()) apply('fleet');

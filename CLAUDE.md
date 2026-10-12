@@ -190,3 +190,7 @@ The suite intentionally re-implements gear inference, regime classification, and
 ## Driving style of the owner (relevant context)
 
 Daily driver; as of 2026-10-12, 93 drives / 61 legs / 43 trips, ~3,136 mi, ~55 hr (incl. two NC<->NYC road trips). 85% of throttle-time at <30%, max RPM ever 5,414 (never reached redline). Premium fuel (93 octane) only. <60k miles. Knock rate (refined definition) ~3% of boost time — normal for any turbo. No real engine concerns from the data; the dashboard is mostly used for engagement + the rev-match calculator + spot-checks.
+
+<!-- PIF:BEGIN v0.2 -->
+@AGENTS.md
+<!-- PIF:END -->

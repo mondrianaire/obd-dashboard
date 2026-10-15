@@ -463,10 +463,18 @@ def git(meta: dict, skip: bool):
             print(f"  ! {' '.join(cmd)} -> exit {r.returncode}\n"
                   f"  stdout: {r.stdout}\n  stderr: {r.stderr}")
         return r
-    run(["git", "add", "-A"])
-    r = run(["git", "commit", "-m", msg])
-    if "nothing to commit" in r.stdout:
+    # Stage and commit only what the refresh generates, so unrelated local work (agent setup, drafts,
+    # uncommitted edits) is never published by a scheduled run.
+    generated = [p for p in ("telemetry_data.json", "telemetry_data.js", "telemetry_status.json",
+                             "index.html", "drives", "data") if os.path.exists(os.path.join(HERE, p))]
+    run(["git", "add", "-A", "--", *generated])
+    staged = run(["git", "diff", "--cached", "--name-only", "--", *generated]).stdout.split()
+    if not staged:
         print("  (no changes to commit)")
+        return
+    r = run(["git", "commit", "-m", msg, "--", *staged])
+    if r.returncode != 0:
+        print("  commit failed - nothing pushed")
         return
     print(f"  committed: {msg}")
     r = run(["git", "push"])

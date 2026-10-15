@@ -27,3 +27,6 @@ refresh.log
 
 # State file the daily Claude cowork notifier uses to detect what's new
 .last_seen_state.json
+
+# PIF agent setup: local runtime state (task files, logs, local paths). Never publish it.
+.pif/
